@@ -42,12 +42,18 @@
             <div class="character-area-label">character-area</div>
           </div>
 
-          <div id="nudgePad" class="nudge-pad" hidden aria-label="1px微調整">
-            <button class="nudge-btn nudge-up" data-dx="0" data-dy="-1" type="button" aria-label="上へ1px">▲</button>
-            <button class="nudge-btn nudge-left" data-dx="-1" data-dy="0" type="button" aria-label="左へ1px">◀︎</button>
-            <div class="nudge-center" aria-hidden="true">1px</div>
-            <button class="nudge-btn nudge-right" data-dx="1" data-dy="0" type="button" aria-label="右へ1px">▶︎</button>
-            <button class="nudge-btn nudge-down" data-dx="0" data-dy="1" type="button" aria-label="下へ1px">▼</button>
+          <div id="nudgePad" class="part-controls" hidden aria-label="パーツ微調整">
+            <div class="nudge-pad" aria-label="1px微調整">
+              <button class="nudge-btn nudge-up" data-dx="0" data-dy="-1" type="button" aria-label="上へ1px">▲</button>
+              <button class="nudge-btn nudge-left" data-dx="-1" data-dy="0" type="button" aria-label="左へ1px">◀︎</button>
+              <div class="nudge-center" aria-hidden="true">1px</div>
+              <button class="nudge-btn nudge-right" data-dx="1" data-dy="0" type="button" aria-label="右へ1px">▶︎</button>
+              <button class="nudge-btn nudge-down" data-dx="0" data-dy="1" type="button" aria-label="下へ1px">▼</button>
+            </div>
+            <div class="rotate-controls" aria-label="1度回転">
+              <button class="rotate-btn" data-rotate="-1" type="button" aria-label="左へ1度回転">↶<span>-1°</span></button>
+              <button class="rotate-btn" data-rotate="1" type="button" aria-label="右へ1度回転">↷<span>+1°</span></button>
+            </div>
           </div>
         </div>
       </div>

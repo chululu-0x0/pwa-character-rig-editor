@@ -156,10 +156,22 @@ function isDescendant(candidateId, ancestorId) {
 function syncInspector() {
   const part = selectedPart();
   const disabled = !part;
-  ['partX','partY','partW','partRot','partRotRange','pivotX','pivotY'].forEach(key => {
+  const lockedByPivot = Boolean(part && state.pivotMode);
+
+  ['partX','partY','partW','partRot','partRotRange'].forEach(key => {
+    inputs[key].disabled = disabled || lockedByPivot;
+  });
+  ['pivotX','pivotY'].forEach(key => {
     inputs[key].disabled = disabled;
   });
-  parentSelect.disabled = disabled;
+  parentSelect.disabled = disabled || lockedByPivot;
+  ['areaX','areaY','areaW','areaH'].forEach(key => {
+    inputs[key].disabled = state.pivotMode;
+  });
+  document.body.classList.toggle('pivot-mode', state.pivotMode);
+  nudgePad.querySelectorAll('.rotate-btn').forEach(button => {
+    button.disabled = state.pivotMode;
+  });
 
   if (!part) {
     selectedCoord.textContent = 'X — / Y —';
@@ -293,7 +305,7 @@ function positionNudgePad() {
   const nodeRect = node.getBoundingClientRect();
   const scaleX = state.stage.width / stageRect.width || 1;
   const scaleY = state.stage.height / stageRect.height || 1;
-  const padW = nudgePad.offsetWidth || 122;
+  const padW = nudgePad.offsetWidth || 194;
   const padH = nudgePad.offsetHeight || 122;
 
   let left = ((nodeRect.left + nodeRect.width / 2) - stageRect.left) * scaleX - padW / 2;
@@ -311,9 +323,20 @@ function positionNudgePad() {
 function nudgeSelected(dx, dy) {
   const part = selectedPart();
   if (!part) return;
+  const node = getPartNode(part.id);
+
+  if (state.pivotMode) {
+    part.pivotX += dx;
+    part.pivotY += dy;
+    applyPartStyle(part, node);
+    syncInspector();
+    scheduleNudgePad();
+    markChanged('ピボットを1px移動');
+    return;
+  }
+
   part.x += dx;
   part.y += dy;
-  const node = getPartNode(part.id);
   if (node) {
     node.style.left = `${part.x}px`;
     node.style.top = `${part.y}px`;
@@ -323,11 +346,29 @@ function nudgeSelected(dx, dy) {
   markChanged('1px移動');
 }
 
+function rotateSelected(delta) {
+  const part = selectedPart();
+  if (!part || state.pivotMode) return;
+  part.rotation += delta;
+  applyPartStyle(part);
+  syncInspector();
+  scheduleNudgePad();
+  markChanged(`${delta > 0 ? '+' : ''}${delta}°回転`);
+}
+
 nudgePad.querySelectorAll('.nudge-btn').forEach(button => {
   button.addEventListener('pointerdown', (event) => {
     event.preventDefault();
     event.stopPropagation();
     nudgeSelected(Number(button.dataset.dx), Number(button.dataset.dy));
+  });
+});
+
+nudgePad.querySelectorAll('.rotate-btn').forEach(button => {
+  button.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    rotateSelected(Number(button.dataset.rotate));
   });
 });
 
@@ -416,8 +457,10 @@ $('#togglePivotBtn').addEventListener('click', (event) => {
   event.currentTarget.classList.toggle('active', state.pivotMode);
   event.currentTarget.textContent = state.pivotMode ? 'ピボット設定中' : 'ピボット設定';
   $('#pivotModeHint').textContent = state.pivotMode
-    ? '選択したパーツ画像上で、回転中心にしたい場所をタップしてください。'
+    ? 'パーツ本体は固定中です。画像上をタップするか、十字キーでピボットだけを1pxずつ動かせます。'
     : '「ピボット設定」を押してから、画像上の回転中心にしたい場所をタップします。';
+  syncInspector();
+  scheduleNudgePad();
 });
 
 $('#applyStageSizeBtn').addEventListener('click', () => {
@@ -429,6 +472,7 @@ $('#applyStageSizeBtn').addEventListener('click', () => {
 
 ['areaX','areaY','areaW','areaH'].forEach(key => {
   inputs[key].addEventListener('input', () => {
+    if (state.pivotMode) return;
     state.area.x = number(inputs.areaX.value, state.area.x);
     state.area.y = number(inputs.areaY.value, state.area.y);
     state.area.width = Math.max(40, number(inputs.areaW.value, state.area.width));
@@ -442,6 +486,7 @@ function bindPartNumber(inputKey, partKey, min = null) {
   inputs[inputKey].addEventListener('input', () => {
     const part = selectedPart();
     if (!part) return;
+    if (state.pivotMode && !['pivotX', 'pivotY'].includes(partKey)) return;
     let value = number(inputs[inputKey].value, part[partKey]);
     if (min !== null) value = Math.max(min, value);
     part[partKey] = value;
@@ -468,7 +513,7 @@ bindPartNumber('pivotY', 'pivotY');
 
 parentSelect.addEventListener('change', () => {
   const part = selectedPart();
-  if (!part) return;
+  if (!part || state.pivotMode) return;
   part.parentId = parentSelect.value;
   renderParts();
   markChanged('親子関係変更');
@@ -562,6 +607,7 @@ $('#resetBtn').addEventListener('click', () => {
   jsonPreview.value = '';
   $('#togglePivotBtn').classList.remove('active');
   $('#togglePivotBtn').textContent = 'ピボット設定';
+  $('#pivotModeHint').textContent = '「ピボット設定」を押してから、画像上の回転中心にしたい場所をタップします。';
 
   syncStage();
   syncArea();

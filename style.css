@@ -69,7 +69,7 @@ button.active { background: var(--accent-soft); border-color: var(--accent); }
     linear-gradient(45deg, transparent 75%, #eee8e1 75%) 0 0/20px 20px,
     linear-gradient(45deg, transparent 75%, #eee8e1 75%) 10px -10px/20px 20px,
     linear-gradient(45deg, #eee8e1 25%, #f8f5f1 25%) 10px -10px/20px 20px;
-  padding: 24px;
+  padding: 0;
   overscroll-behavior: contain;
 }
 .stage {
@@ -163,18 +163,27 @@ button.active { background: var(--accent-soft); border-color: var(--accent); }
   pointer-events: none;
 }
 
-/* 選択中パーツの下に出る1px微調整用の円形操作盤 */
-.nudge-pad {
+/* 選択中パーツの近くに出る微調整UI */
+.part-controls {
   position: absolute;
-  width: 122px;
+  width: 194px;
   height: 122px;
   z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  touch-action: none;
+}
+.nudge-pad {
+  position: relative;
+  flex: 0 0 122px;
+  width: 122px;
+  height: 122px;
   border-radius: 50%;
   background: rgba(255, 253, 249, .94);
   border: 1px solid rgba(140, 107, 183, .35);
   box-shadow: 0 8px 24px rgba(61, 48, 76, .18);
   backdrop-filter: blur(5px);
-  touch-action: none;
 }
 .nudge-btn {
   position: absolute;
@@ -211,6 +220,32 @@ button.active { background: var(--accent-soft); border-color: var(--accent); }
   font-weight: 700;
   pointer-events: none;
 }
+.rotate-controls {
+  display: grid;
+  gap: 8px;
+}
+.rotate-btn {
+  width: 60px;
+  height: 54px;
+  padding: 0;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 1px;
+  background: rgba(255, 253, 249, .96);
+  border: 1px solid #d7cae6;
+  color: #654a87;
+  font-size: 25px;
+  line-height: .85;
+  box-shadow: 0 5px 14px rgba(74, 58, 91, .12);
+  touch-action: manipulation;
+}
+.rotate-btn span { font-size: 9px; font-weight: 700; }
+.rotate-btn:active { background: var(--accent-soft); transform: scale(.96); }
+.rotate-btn:disabled { opacity: .35; cursor: default; }
+.pivot-mode .rig-part { cursor: crosshair; }
+.pivot-mode .rig-part.selected { outline-style: dashed; }
 
 .inspector-panel { display: flex; flex-direction: column; gap: 10px; }
 .card {
@@ -254,7 +289,7 @@ textarea { margin-top: 10px; resize: vertical; min-height: 150px; font-family: u
 @media (max-width: 900px) {
   .app-header { padding-inline: 12px; }
   .app-shell { grid-template-columns: 1fr; padding: 0 12px 22px; }
-  .stage-wrap { min-height: 500px; padding: 12px; }
+  .stage-wrap { min-height: 0; padding: 0; border-radius: 0; }
   .inspector-panel { display: grid; grid-template-columns: 1fr; }
 }
 
@@ -263,9 +298,10 @@ textarea { margin-top: 10px; resize: vertical; min-height: 150px; font-family: u
   h1 { font-size: 21px; }
   .toolbar { gap: 6px; }
   button, .file-button { padding: 9px 10px; font-size: 12px; }
-  .stage-wrap { margin-inline: -12px; border-radius: 0; border-left: 0; border-right: 0; padding: 8px; }
+  .stage-wrap { margin-inline: -12px; border-radius: 0; border-left: 0; border-right: 0; padding: 0; }
   .stage-size-row { padding-top: 2px; }
-  .nudge-pad { width: 126px; height: 126px; }
+  .part-controls { width: 198px; height: 126px; }
+  .nudge-pad { flex-basis: 126px; width: 126px; height: 126px; }
   .nudge-btn { width: 47px; height: 47px; }
   .nudge-up { left: 39px; }
   .nudge-left { top: 39px; }
