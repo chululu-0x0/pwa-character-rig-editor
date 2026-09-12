@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>PWA Character Rig Editor</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">PWA Character Rig Editor</p>
+      <h1>簡易リギング＆配置エディタ</h1>
+    </div>
+    <button id="resetBtn" class="ghost-button" type="button">初期化</button>
+  </header>
+
+  <main class="app-shell">
+    <section class="workspace-panel">
+      <div class="toolbar">
+        <label class="file-button">
+          <input id="backgroundInput" type="file" accept="image/*" />
+          スクショを読み込む
+        </label>
+        <label class="file-button">
+          <input id="partInput" type="file" accept="image/png,image/webp,image/jpeg" multiple />
+          パーツ画像を追加
+        </label>
+        <button id="togglePivotBtn" type="button">ピボット設定</button>
+        <button id="fitBtn" type="button">表示を中央へ</button>
+      </div>
+
+      <div class="stage-wrap">
+        <div id="stage" class="stage" aria-label="編集キャンバス">
+          <div id="stageEmpty" class="stage-empty">
+            <strong>まずはPWAのスクショを読み込んでください</strong>
+            <span>その上にPNGパーツを重ねて位置を決められます。</span>
+          </div>
+          <img id="backgroundImage" class="background-image" alt="PWAスクリーンショット" hidden />
+          <div id="characterArea" class="character-area">
+            <div class="character-area-label">character-area</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="stage-size-row">
+        <label>基準幅 <input id="stageWidth" type="number" min="240" max="1600" value="390" /> px</label>
+        <label>基準高さ <input id="stageHeight" type="number" min="320" max="2400" value="844" /> px</label>
+        <button id="applyStageSizeBtn" type="button">サイズ適用</button>
+      </div>
+    </section>
+
+    <aside class="inspector-panel">
+      <section class="card">
+        <h2>キャラクター領域</h2>
+        <div class="grid-2">
+          <label>X <input id="areaX" type="number" value="12" /></label>
+          <label>Y <input id="areaY" type="number" value="18" /></label>
+          <label>幅 <input id="areaW" type="number" min="40" value="160" /></label>
+          <label>高さ <input id="areaH" type="number" min="40" value="220" /></label>
+        </div>
+        <p class="hint">この領域を基準にパーツの座標を保存します。</p>
+      </section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h2>パーツ</h2>
+          <button id="deletePartBtn" class="danger-link" type="button">選択を削除</button>
+        </div>
+        <select id="partSelect" size="6" aria-label="パーツ一覧"></select>
+      </section>
+
+      <section class="card" id="partInspector">
+        <h2>選択パーツ</h2>
+        <div class="grid-2">
+          <label>X <input id="partX" type="number" value="0" /></label>
+          <label>Y <input id="partY" type="number" value="0" /></label>
+          <label>幅 <input id="partW" type="number" min="1" value="100" /></label>
+          <label>角度 <input id="partRot" type="number" step="1" value="0" />°</label>
+          <label>Pivot X <input id="pivotX" type="number" step="1" value="0" /></label>
+          <label>Pivot Y <input id="pivotY" type="number" step="1" value="0" /></label>
+        </div>
+        <label class="range-label">角度
+          <input id="partRotRange" type="range" min="-180" max="180" value="0" />
+        </label>
+        <label>親パーツ
+          <select id="parentSelect">
+            <option value="">なし（character-area基準）</option>
+          </select>
+        </label>
+        <p id="pivotModeHint" class="hint">ピボット設定を押すと、選択中の画像をタップした位置が回転中心になります。</p>
+      </section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h2>データ</h2>
+          <span class="status" id="statusText">未保存</span>
+        </div>
+        <div class="button-stack">
+          <button id="copyJsonBtn" type="button">JSONをコピー</button>
+          <button id="downloadJsonBtn" type="button">JSONを保存</button>
+          <label class="file-button secondary">
+            <input id="jsonInput" type="file" accept="application/json,.json" />
+            JSONを読み込む
+          </label>
+        </div>
+        <textarea id="jsonPreview" rows="12" spellcheck="false" readonly></textarea>
+      </section>
+    </aside>
+  </main>
+
+  <template id="partTemplate">
+    <div class="rig-part" tabindex="0">
+      <img draggable="false" alt="" />
+      <span class="pivot-dot" title="回転中心"></span>
+      <span class="part-name-badge"></span>
+    </div>
+  </template>
+
+  <script src="script.js"></script>
+</body>
+</html>
