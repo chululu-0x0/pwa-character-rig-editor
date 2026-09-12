@@ -10,7 +10,7 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>簡易リギング＆配置エディタ</h1>
+      <h1>キャラクター配置エディタ</h1>
     </div>
     <button id="resetBtn" class="ghost-button" type="button">初期化</button>
   </header>
@@ -33,12 +33,21 @@
       <div class="stage-wrap">
         <div id="stage" class="stage" aria-label="編集キャンバス">
           <div id="stageEmpty" class="stage-empty">
-            <strong>まずはPWAのスクショを読み込んでください</strong>
-            <span>その上にPNGパーツを重ねて位置を決められます。</span>
+            <strong>スクショは位置合わせ用の下敷きです</strong>
+            <span>画像そのものは保存せず、座標だけを取り出します。</span>
           </div>
           <img id="backgroundImage" class="background-image" alt="PWAスクリーンショット" hidden />
+
           <div id="characterArea" class="character-area">
             <div class="character-area-label">character-area</div>
+          </div>
+
+          <div id="nudgePad" class="nudge-pad" hidden aria-label="1px微調整">
+            <button class="nudge-btn nudge-up" data-dx="0" data-dy="-1" type="button" aria-label="上へ1px">▲</button>
+            <button class="nudge-btn nudge-left" data-dx="-1" data-dy="0" type="button" aria-label="左へ1px">◀︎</button>
+            <div class="nudge-center" aria-hidden="true">1px</div>
+            <button class="nudge-btn nudge-right" data-dx="1" data-dy="0" type="button" aria-label="右へ1px">▶︎</button>
+            <button class="nudge-btn nudge-down" data-dx="0" data-dy="1" type="button" aria-label="下へ1px">▼</button>
           </div>
         </div>
       </div>
@@ -59,7 +68,7 @@
           <label>幅 <input id="areaW" type="number" min="40" value="160" /></label>
           <label>高さ <input id="areaH" type="number" min="40" value="220" /></label>
         </div>
-        <p class="hint">この領域を基準にパーツの座標を保存します。</p>
+        <p class="hint">パーツのX/Yはこの領域、または親パーツを基準にします。</p>
       </section>
 
       <section class="card">
@@ -67,11 +76,14 @@
           <h2>パーツ</h2>
           <button id="deletePartBtn" class="danger-link" type="button">選択を削除</button>
         </div>
-        <select id="partSelect" size="6" aria-label="パーツ一覧"></select>
+        <select id="partSelect" size="5" aria-label="パーツ一覧"></select>
       </section>
 
       <section class="card" id="partInspector">
-        <h2>選択パーツ</h2>
+        <div class="card-title-row">
+          <h2>選択パーツ</h2>
+          <span id="selectedCoord" class="coord-badge">X — / Y —</span>
+        </div>
         <div class="grid-2">
           <label>X <input id="partX" type="number" value="0" /></label>
           <label>Y <input id="partY" type="number" value="0" /></label>
@@ -88,23 +100,21 @@
             <option value="">なし（character-area基準）</option>
           </select>
         </label>
-        <p id="pivotModeHint" class="hint">ピボット設定を押すと、選択中の画像をタップした位置が回転中心になります。</p>
+        <p id="pivotModeHint" class="hint">「ピボット設定」を押してから、画像上の回転中心にしたい場所をタップします。</p>
       </section>
 
       <section class="card">
         <div class="card-title-row">
-          <h2>データ</h2>
-          <span class="status" id="statusText">未保存</span>
+          <h2>座標データ</h2>
+          <span class="status" id="statusText">未出力</span>
         </div>
+        <p class="hint data-hint">画像やスクショは含みません。位置決めに必要な数値だけを出力します。</p>
         <div class="button-stack">
-          <button id="copyJsonBtn" type="button">JSONをコピー</button>
-          <button id="downloadJsonBtn" type="button">JSONを保存</button>
-          <label class="file-button secondary">
-            <input id="jsonInput" type="file" accept="application/json,.json" />
-            JSONを読み込む
-          </label>
+          <button id="copyJsonBtn" type="button">座標JSONをコピー</button>
+          <button id="downloadJsonBtn" type="button">座標JSONを保存</button>
+          <button id="previewJsonBtn" class="secondary-button" type="button">下に座標を表示</button>
         </div>
-        <textarea id="jsonPreview" rows="12" spellcheck="false" readonly></textarea>
+        <textarea id="jsonPreview" rows="10" spellcheck="false" readonly placeholder="必要なときだけ座標JSONを表示します。"></textarea>
       </section>
     </aside>
   </main>
