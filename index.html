@@ -10,9 +10,13 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>キャラクター配置エディタ</h1>
+      <h1>キャラクター配置エディタ <span class="version">v4</span></h1>
     </div>
-    <button id="resetBtn" class="ghost-button" type="button">初期化</button>
+    <div class="header-actions">
+      <button id="togglePivotBtn" type="button">ピボット設定</button>
+      <button id="testRunBtn" type="button">試運転</button>
+      <button id="resetBtn" class="ghost-button" type="button">初期化</button>
+    </div>
   </header>
 
   <main class="app-shell">
@@ -20,48 +24,33 @@
       <div class="toolbar">
         <label class="file-button">
           <input id="backgroundInput" type="file" accept="image/*" />
-          スクショを読み込む
+          下地スクショ
         </label>
         <label class="file-button">
           <input id="partInput" type="file" accept="image/png,image/webp,image/jpeg" multiple />
-          パーツ画像を追加
+          パーツ追加
         </label>
-        <button id="togglePivotBtn" type="button">ピボット設定</button>
-        <button id="fitBtn" type="button">表示を中央へ</button>
+        <button id="fitBtn" type="button">画面中央へ</button>
       </div>
 
       <div class="stage-wrap">
         <div id="stage" class="stage" aria-label="編集キャンバス">
           <div id="stageEmpty" class="stage-empty">
-            <strong>スクショは位置合わせ用の下敷きです</strong>
-            <span>画像そのものは保存せず、座標だけを取り出します。</span>
+            <strong>下地スクショを読み込んで位置を合わせます</strong>
+            <span>画像は保存せず、座標だけを書き出します。</span>
           </div>
           <img id="backgroundImage" class="background-image" alt="PWAスクリーンショット" hidden />
-
           <div id="characterArea" class="character-area">
             <div class="character-area-label">character-area</div>
-          </div>
-
-          <div id="nudgePad" class="part-controls" hidden aria-label="パーツ微調整">
-            <div class="nudge-pad" aria-label="1px微調整">
-              <button class="nudge-btn nudge-up" data-dx="0" data-dy="-1" type="button" aria-label="上へ1px">▲</button>
-              <button class="nudge-btn nudge-left" data-dx="-1" data-dy="0" type="button" aria-label="左へ1px">◀︎</button>
-              <div class="nudge-center" aria-hidden="true">1px</div>
-              <button class="nudge-btn nudge-right" data-dx="1" data-dy="0" type="button" aria-label="右へ1px">▶︎</button>
-              <button class="nudge-btn nudge-down" data-dx="0" data-dy="1" type="button" aria-label="下へ1px">▼</button>
-            </div>
-            <div class="rotate-controls" aria-label="1度回転">
-              <button class="rotate-btn" data-rotate="-1" type="button" aria-label="左へ1度回転">↶<span>-1°</span></button>
-              <button class="rotate-btn" data-rotate="1" type="button" aria-label="右へ1度回転">↷<span>+1°</span></button>
-            </div>
           </div>
         </div>
       </div>
 
       <div class="stage-size-row">
-        <label>基準幅 <input id="stageWidth" type="number" min="240" max="1600" value="390" /> px</label>
-        <label>基準高さ <input id="stageHeight" type="number" min="320" max="2400" value="844" /> px</label>
-        <button id="applyStageSizeBtn" type="button">サイズ適用</button>
+        <span class="row-title">基準画面</span>
+        <label>幅 <input id="stageWidth" class="numeric-input" readonly inputmode="none" value="390" /> px</label>
+        <label>高さ <input id="stageHeight" class="numeric-input" readonly inputmode="none" value="844" /> px</label>
+        <button id="applyStageSizeBtn" type="button">適用</button>
       </div>
     </section>
 
@@ -69,44 +58,50 @@
       <section class="card">
         <h2>キャラクター領域</h2>
         <div class="grid-2">
-          <label>X <input id="areaX" type="number" value="12" /></label>
-          <label>Y <input id="areaY" type="number" value="18" /></label>
-          <label>幅 <input id="areaW" type="number" min="40" value="160" /></label>
-          <label>高さ <input id="areaH" type="number" min="40" value="220" /></label>
+          <label>X <input id="areaX" class="numeric-input" readonly inputmode="none" value="12" /></label>
+          <label>Y <input id="areaY" class="numeric-input" readonly inputmode="none" value="18" /></label>
+          <label>幅 <input id="areaW" class="numeric-input" readonly inputmode="none" value="160" /></label>
+          <label>高さ <input id="areaH" class="numeric-input" readonly inputmode="none" value="220" /></label>
         </div>
-        <p class="hint">パーツのX/Yはこの領域、または親パーツを基準にします。</p>
-      </section>
-
-      <section class="card">
-        <div class="card-title-row">
-          <h2>パーツ</h2>
-          <button id="deletePartBtn" class="danger-link" type="button">選択を削除</button>
-        </div>
-        <select id="partSelect" size="5" aria-label="パーツ一覧"></select>
       </section>
 
       <section class="card" id="partInspector">
         <div class="card-title-row">
           <h2>選択パーツ</h2>
-          <span id="selectedCoord" class="coord-badge">X — / Y —</span>
+          <span id="selectedCoord" class="coord-badge">未選択</span>
         </div>
+        <div class="selected-name" id="selectedName">レイヤーから選択</div>
         <div class="grid-2">
-          <label>X <input id="partX" type="number" value="0" /></label>
-          <label>Y <input id="partY" type="number" value="0" /></label>
-          <label>幅 <input id="partW" type="number" min="1" value="100" /></label>
-          <label>角度 <input id="partRot" type="number" step="1" value="0" />°</label>
-          <label>Pivot X <input id="pivotX" type="number" step="1" value="0" /></label>
-          <label>Pivot Y <input id="pivotY" type="number" step="1" value="0" /></label>
+          <label>X <input id="partX" class="numeric-input" readonly inputmode="none" value="0" /></label>
+          <label>Y <input id="partY" class="numeric-input" readonly inputmode="none" value="0" /></label>
+          <label>幅 <input id="partW" class="numeric-input" readonly inputmode="none" value="100" /></label>
+          <label>角度 <input id="partRot" class="numeric-input" readonly inputmode="none" value="0" />°</label>
+          <label>Pivot X <input id="pivotX" class="numeric-input" readonly inputmode="none" value="0" /></label>
+          <label>Pivot Y <input id="pivotY" class="numeric-input" readonly inputmode="none" value="0" /></label>
         </div>
-        <label class="range-label">角度
-          <input id="partRotRange" type="range" min="-180" max="180" value="0" />
-        </label>
         <label>親パーツ
           <select id="parentSelect">
             <option value="">なし（character-area基準）</option>
           </select>
         </label>
-        <p id="pivotModeHint" class="hint">「ピボット設定」を押してから、画像上の回転中心にしたい場所をタップします。</p>
+        <p id="pivotModeHint" class="hint">ピボット設定中はパーツ本体を固定し、十字マークだけを動かします。</p>
+        <button id="deletePartBtn" class="danger-link" type="button">選択レイヤーを削除</button>
+      </section>
+
+      <section class="card test-card">
+        <div class="card-title-row">
+          <h2>試運転</h2>
+          <span id="testStatus" class="status">停止中</span>
+        </div>
+        <p class="hint">選択パーツを往復回転させ、子パーツの追従を確認します。保存値は変更しません。</p>
+        <div class="grid-2">
+          <label>振れ幅 <input id="testAmplitude" class="numeric-input" readonly inputmode="none" value="15" />°</label>
+          <label>1往復 <input id="testDuration" class="numeric-input" readonly inputmode="none" value="1200" />ms</label>
+        </div>
+        <div class="button-row">
+          <button id="startTestBtn" type="button">再生</button>
+          <button id="stopTestBtn" type="button">停止</button>
+        </div>
       </section>
 
       <section class="card">
@@ -114,22 +109,66 @@
           <h2>座標データ</h2>
           <span class="status" id="statusText">未出力</span>
         </div>
-        <p class="hint data-hint">画像やスクショは含みません。位置決めに必要な数値だけを出力します。</p>
+        <p class="hint">画像は含めず、配置に必要な数値だけを書き出します。</p>
         <div class="button-stack">
           <button id="copyJsonBtn" type="button">座標JSONをコピー</button>
           <button id="downloadJsonBtn" type="button">座標JSONを保存</button>
-          <button id="previewJsonBtn" class="secondary-button" type="button">下に座標を表示</button>
+          <button id="previewJsonBtn" class="secondary-button" type="button">JSONを表示</button>
         </div>
-        <textarea id="jsonPreview" rows="10" spellcheck="false" readonly placeholder="必要なときだけ座標JSONを表示します。"></textarea>
+        <textarea id="jsonPreview" rows="8" spellcheck="false" readonly placeholder="必要なときだけ表示します。"></textarea>
       </section>
     </aside>
   </main>
 
+  <section id="controlPanel" class="floating-panel control-panel" data-panel="controls">
+    <div class="panel-drag-handle">操作盤 <span>ドラッグで移動</span></div>
+    <div class="control-content">
+      <div class="nudge-pad" aria-label="1px微調整">
+        <button class="nudge-btn nudge-up" data-dx="0" data-dy="-1" type="button">▲</button>
+        <button class="nudge-btn nudge-left" data-dx="-1" data-dy="0" type="button">◀︎</button>
+        <div class="nudge-center">1px</div>
+        <button class="nudge-btn nudge-right" data-dx="1" data-dy="0" type="button">▶︎</button>
+        <button class="nudge-btn nudge-down" data-dx="0" data-dy="1" type="button">▼</button>
+      </div>
+      <div class="rotate-controls" aria-label="1度回転">
+        <button class="rotate-btn" data-rotate="-1" type="button">↶ <span>-1°</span></button>
+        <button class="rotate-btn" data-rotate="1" type="button">↷ <span>+1°</span></button>
+      </div>
+      <div id="controlModeText" class="control-mode">パーツ移動</div>
+    </div>
+  </section>
+
+  <section id="layerPanel" class="floating-panel layer-panel" data-panel="layers">
+    <div class="panel-drag-handle">レイヤー <span>上ほど手前</span></div>
+    <div id="layerList" class="layer-list">
+      <div class="layer-empty">パーツ未読込</div>
+    </div>
+  </section>
+
+  <div id="numpadBackdrop" class="numpad-backdrop" hidden>
+    <section id="numpad" class="numpad" role="dialog" aria-modal="true" aria-label="数値入力">
+      <div class="numpad-display-row">
+        <span id="numpadLabel">数値</span>
+        <output id="numpadDisplay">0</output>
+      </div>
+      <div class="numpad-grid">
+        <button data-key="7">7</button><button data-key="8">8</button><button data-key="9">9</button>
+        <button data-key="4">4</button><button data-key="5">5</button><button data-key="6">6</button>
+        <button data-key="1">1</button><button data-key="2">2</button><button data-key="3">3</button>
+        <button data-key="sign">±</button><button data-key="0">0</button><button data-key="back">⌫</button>
+      </div>
+      <div class="numpad-actions">
+        <button id="numpadClearBtn" type="button">消す</button>
+        <button id="numpadCancelBtn" type="button">キャンセル</button>
+        <button id="numpadOkBtn" class="primary-button" type="button">確定</button>
+      </div>
+    </section>
+  </div>
+
   <template id="partTemplate">
     <div class="rig-part" tabindex="0">
       <img draggable="false" alt="" />
-      <span class="pivot-dot" title="回転中心"></span>
-      <span class="part-name-badge"></span>
+      <span class="pivot-cross" title="回転中心" aria-hidden="true"></span>
     </div>
   </template>
 
