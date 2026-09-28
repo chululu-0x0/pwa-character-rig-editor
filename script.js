@@ -6,6 +6,7 @@ const stageEmpty = $('#stageEmpty');
 const backgroundInput = $('#backgroundInput');
 const backgroundImage = $('#backgroundImage');
 const partInput = $('#partInput');
+const importJsonInput = $('#importJsonInput');
 const partTemplate = $('#partTemplate');
 const characterArea = $('#characterArea');
 const parentSelect = $('#parentSelect');
@@ -789,7 +790,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 5,
+    version: 6,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     parts: [...state.parts].sort((a,b) => a.order - b.order).map(p => ({
@@ -805,6 +806,7 @@ function exportData() {
       pivotX: Math.round(p.pivotX),
       pivotY: Math.round(p.pivotY),
       parentId: p.parentId,
+      parentFileName: p.parentId ? (partById(p.parentId)?.fileName || '') : '',
       visible: p.visible,
       order: p.order
     }))
@@ -824,6 +826,120 @@ $('#downloadJsonBtn').addEventListener('click', () => {
   const a = document.createElement('a'); a.href = url; a.download = 'character-coordinates.json'; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
   statusText.textContent = '座標保存済み';
+});
+
+// ---------- import saved coordinates ----------
+function findCurrentPartForSaved(saved, unusedIds) {
+  const savedFile = String(saved?.fileName || '');
+  const savedName = String(saved?.name || '');
+  let current = state.parts.find(p => unusedIds.has(p.id) && p.fileName === savedFile);
+  if (!current && savedFile) {
+    const lower = savedFile.toLocaleLowerCase();
+    current = state.parts.find(p => unusedIds.has(p.id) && String(p.fileName || '').toLocaleLowerCase() === lower);
+  }
+  if (!current && savedName) {
+    current = state.parts.find(p => unusedIds.has(p.id) && p.name === savedName);
+  }
+  return current || null;
+}
+
+function importCoordinateData(data) {
+  if (!data || !Array.isArray(data.parts)) throw new Error('parts配列がありません');
+  if (!state.parts.length) throw new Error('先にパーツ画像を読み込んでください');
+
+  stopTest();
+  pushHistory();
+
+  const unusedIds = new Set(state.parts.map(p => p.id));
+  const matches = [];
+  const missing = [];
+  const savedIdToCurrentId = new Map();
+
+  data.parts.forEach(saved => {
+    const current = findCurrentPartForSaved(saved, unusedIds);
+    if (!current) {
+      missing.push(saved.fileName || saved.name || saved.id || '不明なパーツ');
+      return;
+    }
+    unusedIds.delete(current.id);
+    matches.push({ saved, current });
+    if (saved.id != null) savedIdToCurrentId.set(String(saved.id), current.id);
+  });
+
+  if (!matches.length) throw new Error('同じファイル名のパーツが見つかりませんでした');
+
+  if (data.stage && Number.isFinite(Number(data.stage.width)) && Number.isFinite(Number(data.stage.height))) {
+    state.stage.width = Math.max(240, num(data.stage.width, state.stage.width));
+    state.stage.height = Math.max(320, num(data.stage.height, state.stage.height));
+  }
+  const savedArea = data.characterArea || data.area;
+  if (savedArea) {
+    state.area.x = num(savedArea.x, state.area.x);
+    state.area.y = num(savedArea.y, state.area.y);
+    state.area.width = Math.max(40, num(savedArea.width, state.area.width));
+    state.area.height = Math.max(40, num(savedArea.height, state.area.height));
+  }
+
+  // First restore each part's own local transform. Parent links are restored afterwards.
+  matches.forEach(({ saved, current }) => {
+    current.x = num(saved.x, current.x);
+    current.y = num(saved.y, current.y);
+    current.width = Math.max(1, num(saved.width, current.width));
+    current.rotation = num(saved.rotation, current.rotation);
+    current.pivotX = num(saved.pivotX, current.pivotX);
+    current.pivotY = num(saved.pivotY, current.pivotY);
+    current.visible = saved.visible !== false;
+    current.order = num(saved.order, current.order);
+    current.parentId = '';
+  });
+
+  // Rebuild hierarchy using saved-id -> currently loaded image-id mapping.
+  matches.forEach(({ saved, current }) => {
+    let parentId = '';
+    if (saved.parentId != null && saved.parentId !== '') {
+      parentId = savedIdToCurrentId.get(String(saved.parentId)) || '';
+    }
+    if (!parentId && saved.parentFileName) {
+      const parentMatch = matches.find(({ saved: candidate }) =>
+        String(candidate.fileName || '').toLocaleLowerCase() === String(saved.parentFileName || '').toLocaleLowerCase()
+      );
+      parentId = parentMatch?.current.id || '';
+    }
+    if (parentId && parentId !== current.id) current.parentId = parentId;
+  });
+
+  normalizeOrders();
+  if (!state.parts.some(p => p.id === state.selectedId)) state.selectedId = matches[0].current.id;
+  syncStage();
+  syncArea();
+  renderParts();
+
+  const extraCount = unusedIds.size;
+  const message = `座標読み込み完了 ${matches.length}/${data.parts.length}パーツ`;
+  statusText.textContent = message;
+  jsonPreview.value = JSON.stringify(data, null, 2);
+
+  if (missing.length || extraCount) {
+    const lines = [message];
+    if (missing.length) lines.push(`見つからなかった画像: ${missing.join(', ')}`);
+    if (extraCount) lines.push(`保存データに無い読込済み画像: ${extraCount}個（現在位置のまま）`);
+    alert(lines.join('\n'));
+  }
+}
+
+importJsonInput.addEventListener('change', async () => {
+  const file = importJsonInput.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    importCoordinateData(data);
+  } catch (error) {
+    statusText.textContent = '座標読み込み失敗';
+    alert(`座標JSONを読み込めませんでした。\n${error?.message || error}`);
+  } finally {
+    importJsonInput.value = '';
+  }
 });
 
 // ---------- reset / misc ----------
