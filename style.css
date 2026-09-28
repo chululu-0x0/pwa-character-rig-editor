@@ -256,3 +256,45 @@ body.animation-playing #ikTarget { display: none !important; }
 @media (max-width: 1000px) {
   .timeline-panel { left: 14px; width: calc(100vw - 28px); min-width: 0; }
 }
+
+
+/* v10: selected-key draft editing */
+.key-edit-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  padding: 7px 8px;
+  margin: 4px 0 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255,255,255,.56);
+  font-size: 11px;
+}
+.key-edit-row label { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.selected-key-label { font-weight: 700; color: #51465d; min-width: 92px; }
+.key-edit-status { color: #83766e; }
+.key-edit-status.dirty { color: #9a5d1d; font-weight: 700; }
+#overwriteKeyBtn:disabled, #duplicateKeyBtn:disabled, #deleteKeyBtn:disabled { opacity: .45; cursor: default; }
+.key-marker.selected {
+  outline: 2px solid rgba(127,98,168,.28);
+  outline-offset: 3px;
+}
+.key-marker.draft { background: #f1a84a; border-color: #c87717; }
+.key-marker-label {
+  position: absolute;
+  left: 50%;
+  top: 17px;
+  min-width: 42px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  background: rgba(55,50,47,.88);
+  color: white;
+  font-size: 8px;
+  line-height: 1;
+  transform: translateX(-50%) rotate(-45deg);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.timeline-ruler { height: 54px; }
+.timeline-markers { height: 25px; }

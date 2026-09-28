@@ -32,6 +32,11 @@ const timelineMarkers = $('#timelineMarkers');
 const animStatus = $('#animStatus');
 const motionName = $('#motionName');
 const animLoop = $('#animLoop');
+const selectedKeyLabel = $('#selectedKeyLabel');
+const keyEditStatus = $('#keyEditStatus');
+const overwriteKeyBtn = $('#overwriteKeyBtn');
+const duplicateKeyBtn = $('#duplicateKeyBtn');
+const deleteKeyBtn = $('#deleteKeyBtn');
 
 const state = {
   stage: { width: 390, height: 844 },
@@ -50,7 +55,8 @@ const state = {
   animation: {
     name: 'walk01', duration: 1000, loop: true, currentTime: 0,
     keyframes: [], playing: false, raf: 0, playStartedAt: 0, playStartTime: 0,
-    previewActive: false, previewPose: null
+    previewActive: false, previewPose: null,
+    selectedKeyId: null, keyDraftTime: null, keyDirty: false
   },
   liveObjectUrls: new Set(),
   undoStack: [],
@@ -65,7 +71,7 @@ const inputs = {
   testAmplitude: $('#testAmplitude'), testDuration: $('#testDuration'),
   testChildScale: $('#testChildScale'), testDelay: $('#testDelay'),
   ikRootName: $('#ikRootName'), ikMidName: $('#ikMidName'), ikEndName: $('#ikEndName'), ikBendName: $('#ikBendName'),
-  animDuration: $('#animDuration'), animTime: $('#animTime')
+  animDuration: $('#animDuration'), animTime: $('#animTime'), selectedKeyTime: $('#selectedKeyTime')
 };
 
 function uid() {
@@ -171,7 +177,8 @@ function freshAnimation() {
   return {
     name: 'walk01', duration: 1000, loop: true, currentTime: 0,
     keyframes: [], playing: false, raf: 0, playStartedAt: 0, playStartTime: 0,
-    previewActive: false, previewPose: null
+    previewActive: false, previewPose: null,
+    selectedKeyId: null, keyDraftTime: null, keyDirty: false
   };
 }
 function cloneKeyframe(frame) {
@@ -189,7 +196,10 @@ function animationForSnapshot() {
     duration: a.duration,
     loop: a.loop,
     currentTime: a.currentTime,
-    keyframes: a.keyframes.map(cloneKeyframe)
+    keyframes: a.keyframes.map(cloneKeyframe),
+    selectedKeyId: a.selectedKeyId || null,
+    keyDraftTime: a.keyDraftTime,
+    keyDirty: !!a.keyDirty
   };
 }
 function poseFromState() {
@@ -210,6 +220,78 @@ function poseEntryForPart(frame, part) {
 }
 function sortedKeyframes() {
   return [...state.animation.keyframes].sort((a,b) => a.time - b.time);
+}
+
+function selectedKeyframe() {
+  return state.animation.keyframes.find(k => k.id === state.animation.selectedKeyId) || null;
+}
+function displayedKeyTime(frame) {
+  if (frame?.id === state.animation.selectedKeyId && state.animation.keyDraftTime != null) return state.animation.keyDraftTime;
+  return frame?.time ?? 0;
+}
+function setSelectedKeyDirty(dirty=true) {
+  if (!selectedKeyframe()) return;
+  state.animation.keyDirty = !!dirty;
+  syncKeyEditUi();
+  renderTimelineMarkers();
+}
+function markSelectedKeyPoseDirty() {
+  if (!selectedKeyframe()) return;
+  setSelectedKeyDirty(true);
+}
+function clearKeySelection() {
+  state.animation.selectedKeyId = null;
+  state.animation.keyDraftTime = null;
+  state.animation.keyDirty = false;
+  syncKeyEditUi();
+  renderTimelineMarkers();
+}
+function selectKeyframe(frame, {preview=true} = {}) {
+  if (!frame) return clearKeySelection();
+  stopAnimation(true);
+  state.animation.selectedKeyId = frame.id;
+  state.animation.keyDraftTime = Math.round(frame.time);
+  state.animation.keyDirty = false;
+  state.animation.currentTime = frame.time;
+  if (preview) applyAnimationPreview(frame.time, {renderMarkers:false});
+  syncKeyEditUi();
+  syncTimelineReadout(false);
+  renderTimelineMarkers();
+}
+function syncKeyEditUi() {
+  const key = selectedKeyframe();
+  const has = !!key;
+  const draft = has ? Math.round(state.animation.keyDraftTime ?? key.time) : 0;
+  inputs.selectedKeyTime.disabled = !has;
+  inputs.selectedKeyTime.value = draft;
+  overwriteKeyBtn.disabled = !has;
+  duplicateKeyBtn.disabled = !has;
+  deleteKeyBtn.disabled = !has && !keyAtTime(Math.round(state.animation.currentTime), 2);
+  if (!has) {
+    selectedKeyLabel.textContent = 'キー未選択';
+    keyEditStatus.textContent = 'タイムライン上の◆を選択';
+    keyEditStatus.classList.remove('dirty');
+    return;
+  }
+  selectedKeyLabel.textContent = `選択キー ${key.time}ms`;
+  if (state.animation.keyDirty) {
+    keyEditStatus.textContent = `未確定 → ${draft}ms`;
+    keyEditStatus.classList.add('dirty');
+  } else {
+    keyEditStatus.textContent = '登録内容と同じ';
+    keyEditStatus.classList.remove('dirty');
+  }
+}
+function setSelectedKeyDraftTime(time) {
+  const key = selectedKeyframe();
+  if (!key) return;
+  const t = Math.round(clamp(num(time, key.time), 0, state.animation.duration));
+  state.animation.keyDraftTime = t;
+  state.animation.currentTime = t;
+  state.animation.keyDirty = t !== Math.round(key.time) || state.animation.keyDirty;
+  syncTimelineReadout(false);
+  syncKeyEditUi();
+  renderTimelineMarkers();
 }
 function interpolatedPoseAt(time) {
   const frames = sortedKeyframes();
@@ -332,30 +414,86 @@ function currentPoseForKeyframe() {
 function keyAtTime(time, tolerance=1) {
   return state.animation.keyframes.find(k => Math.abs(k.time - time) <= tolerance) || null;
 }
-function addOrUpdateKeyframe() {
+
+function addNewKeyframe() {
   stopAnimation(true);
   const t = Math.round(state.animation.currentTime);
+  const collision = keyAtTime(t, 1);
+  if (collision) {
+    selectKeyframe(collision);
+    animStatus.textContent = `${t}msには登録済みキーがあります`;
+    return;
+  }
   pushHistory();
   const pose = currentPoseForKeyframe();
-  const existing = keyAtTime(t, 1);
-  if (existing) {
-    existing.area = { ...pose.area };
-    existing.parts = pose.parts.map(p => ({ ...p }));
-    existing.time = t;
-    markChanged(`キーフレーム更新 ${t}ms`);
-  } else {
-    state.animation.keyframes.push({ id:`key-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, time:t, area:{...pose.area}, parts:pose.parts.map(p=>({...p})) });
-    state.animation.keyframes.sort((a,b)=>a.time-b.time);
-    markChanged(`キーフレーム追加 ${t}ms`);
-  }
-  renderTimelineMarkers();
+  const key = { id:`key-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, time:t, area:{...pose.area}, parts:pose.parts.map(p=>({...p})) };
+  state.animation.keyframes.push(key);
+  state.animation.keyframes.sort((a,b)=>a.time-b.time);
+  selectKeyframe(key, {preview:false});
+  state.animation.keyDirty = false;
   syncAnimationUi();
+  markChanged(`キーフレーム追加 ${t}ms`);
+}
+function overwriteSelectedKeyframe() {
+  const key = selectedKeyframe();
+  if (!key) { animStatus.textContent = '上書きするキーを選択'; return; }
+  stopAnimation(true);
+  const t = Math.round(state.animation.keyDraftTime ?? key.time);
+  const collision = state.animation.keyframes.find(k => k.id !== key.id && Math.abs(k.time - t) <= 1);
+  if (collision) {
+    animStatus.textContent = `${t}msには別のキーがあります`;
+    return;
+  }
+  pushHistory();
+  const pose = currentPoseForKeyframe();
+  key.time = t;
+  key.area = { ...pose.area };
+  key.parts = pose.parts.map(p => ({ ...p }));
+  state.animation.keyframes.sort((a,b)=>a.time-b.time);
+  state.animation.currentTime = t;
+  state.animation.keyDraftTime = t;
+  state.animation.keyDirty = false;
+  applyAnimationPreview(t, {renderMarkers:false});
+  syncAnimationUi();
+  markChanged(`選択キーを上書き ${t}ms`);
+}
+function findDuplicateTime(sourceTime) {
+  const occupied = new Set(state.animation.keyframes.map(k => Math.round(k.time)));
+  const duration = Math.round(state.animation.duration);
+  const candidates = [sourceTime + 100, sourceTime - 100];
+  for (const c of candidates) {
+    const t = Math.round(clamp(c, 0, duration));
+    if (!occupied.has(t)) return t;
+  }
+  for (let d=1; d<=duration; d++) {
+    const right = sourceTime + d, left = sourceTime - d;
+    if (right <= duration && !occupied.has(right)) return right;
+    if (left >= 0 && !occupied.has(left)) return left;
+  }
+  return null;
+}
+function duplicateSelectedKeyframe() {
+  const source = selectedKeyframe();
+  if (!source) { animStatus.textContent = '複製するキーを選択'; return; }
+  const newTime = findDuplicateTime(Math.round(source.time));
+  if (newTime == null) { animStatus.textContent = '複製できる空き時刻がありません'; return; }
+  pushHistory();
+  const copy = cloneKeyframe(source);
+  copy.id = `key-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+  copy.time = newTime;
+  state.animation.keyframes.push(copy);
+  state.animation.keyframes.sort((a,b)=>a.time-b.time);
+  selectKeyframe(copy);
+  markChanged(`キー複製 ${source.time}ms → ${newTime}ms`);
 }
 function deleteCurrentKeyframe() {
-  const key = keyAtTime(Math.round(state.animation.currentTime), 2);
-  if (!key) { animStatus.textContent = 'この時刻にキーなし'; return; }
+  const key = selectedKeyframe() || keyAtTime(Math.round(state.animation.currentTime), 2);
+  if (!key) { animStatus.textContent = '削除するキーなし'; return; }
   pushHistory();
   state.animation.keyframes = state.animation.keyframes.filter(k => k.id !== key.id);
+  state.animation.selectedKeyId = null;
+  state.animation.keyDraftTime = null;
+  state.animation.keyDirty = false;
   renderTimelineMarkers();
   syncAnimationUi();
   if (state.animation.keyframes.length) applyAnimationPreview(state.animation.currentTime, {renderMarkers:true});
@@ -375,23 +513,59 @@ function syncAnimationUi() {
   animLoop.checked = !!state.animation.loop;
   syncTimelineReadout(false);
   animStatus.textContent = `${state.animation.keyframes.length} key`;
+  syncKeyEditUi();
   renderTimelineMarkers();
 }
+
 function renderTimelineMarkers() {
   timelineMarkers.innerHTML = '';
   const duration = Math.max(1, state.animation.duration);
-  const current = Math.round(state.animation.currentTime);
   sortedKeyframes().forEach(frame => {
+    const displayTime = displayedKeyTime(frame);
+    const selected = frame.id === state.animation.selectedKeyId;
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = `key-marker${Math.abs(frame.time-current)<=1 ? ' active' : ''}`;
-    b.style.left = `${clamp(frame.time/duration,0,1)*100}%`;
-    b.title = `${frame.time}ms`;
-    b.setAttribute('aria-label', `${frame.time}ミリ秒のキーフレーム`);
-    b.addEventListener('click', e => {
-      e.stopPropagation();
+    b.className = `key-marker${selected ? ' selected' : ''}${selected && state.animation.keyDirty ? ' draft' : ''}`;
+    b.style.left = `${clamp(displayTime/duration,0,1)*100}%`;
+    b.title = selected && state.animation.keyDirty ? `${frame.time}ms → ${displayTime}ms（未確定）` : `${displayTime}ms`;
+    b.setAttribute('aria-label', `${displayTime}ミリ秒のキーフレーム`);
+    if (selected) {
+      const label = document.createElement('span');
+      label.className = 'key-marker-label';
+      label.textContent = `${displayTime}ms`;
+      b.appendChild(label);
+    }
+    b.addEventListener('pointerdown', e => {
+      e.preventDefault(); e.stopPropagation();
       stopAnimation(true);
-      applyAnimationPreview(frame.time, {renderMarkers:true});
+      if (state.animation.selectedKeyId !== frame.id) selectKeyframe(frame);
+      let dragged = false;
+      const startX = e.clientX;
+      b.setPointerCapture?.(e.pointerId);
+      const move = ev => {
+        if (Math.abs(ev.clientX - startX) > 2) dragged = true;
+        if (!dragged) return;
+        const rect = timelineMarkers.getBoundingClientRect();
+        const ratio = rect.width ? clamp((ev.clientX - rect.left) / rect.width, 0, 1) : 0;
+        const t = Math.round(ratio * state.animation.duration);
+        state.animation.keyDraftTime = t;
+        state.animation.currentTime = t;
+        state.animation.keyDirty = t !== Math.round(frame.time) || state.animation.keyDirty;
+        b.style.left = `${ratio*100}%`;
+        const label = $('.key-marker-label', b);
+        if (label) label.textContent = `${t}ms`;
+        syncTimelineReadout(false);
+        syncKeyEditUi();
+      };
+      const up = () => {
+        b.removeEventListener('pointermove', move);
+        b.removeEventListener('pointerup', up);
+        b.removeEventListener('pointercancel', up);
+        renderTimelineMarkers();
+      };
+      b.addEventListener('pointermove', move);
+      b.addEventListener('pointerup', up);
+      b.addEventListener('pointercancel', up);
     });
     timelineMarkers.appendChild(b);
   });
@@ -409,8 +583,9 @@ function jumpKey(direction) {
   let target;
   if (direction < 0) target = [...frames].reverse().find(k => k.time < t - 1) || frames[0];
   else target = frames.find(k => k.time > t + 1) || frames[frames.length-1];
-  applyAnimationPreview(target.time, {renderMarkers:true});
+  selectKeyframe(target);
 }
+
 function startAnimation() {
   stopTest();
   disableIkMode(true);
@@ -463,16 +638,25 @@ function applyAnimationSnapshot(saved) {
     duration: Math.max(100, num(saved?.duration, fresh.duration)),
     loop: saved?.loop !== false,
     currentTime: clamp(num(saved?.currentTime,0),0,Math.max(100,num(saved?.duration,fresh.duration))),
-    keyframes: Array.isArray(saved?.keyframes) ? saved.keyframes.map(cloneKeyframe) : []
+    keyframes: Array.isArray(saved?.keyframes) ? saved.keyframes.map(cloneKeyframe) : [],
+    selectedKeyId: saved?.selectedKeyId || null,
+    keyDraftTime: saved?.keyDraftTime ?? null,
+    keyDirty: !!saved?.keyDirty
   };
 }
 
 motionName.addEventListener('change', () => { state.animation.name = motionName.value.trim() || 'motion'; markChanged('モーション名変更'); });
 animLoop.addEventListener('change', () => { state.animation.loop = animLoop.checked; markChanged('ループ設定変更'); });
-timelineSlider.addEventListener('input', () => { stopAnimation(true); applyAnimationPreview(num(timelineSlider.value,0), {renderMarkers:false}); });
+timelineSlider.addEventListener('input', () => {
+  stopAnimation(true);
+  if (state.animation.selectedKeyId) { state.animation.selectedKeyId=null; state.animation.keyDraftTime=null; state.animation.keyDirty=false; syncKeyEditUi(); }
+  applyAnimationPreview(num(timelineSlider.value,0), {renderMarkers:false});
+});
 timelineSlider.addEventListener('change', () => renderTimelineMarkers());
-$('#addKeyBtn').addEventListener('click', addOrUpdateKeyframe);
-$('#deleteKeyBtn').addEventListener('click', deleteCurrentKeyframe);
+$('#addKeyBtn').addEventListener('click', addNewKeyframe);
+overwriteKeyBtn.addEventListener('click', overwriteSelectedKeyframe);
+duplicateKeyBtn.addEventListener('click', duplicateSelectedKeyframe);
+deleteKeyBtn.addEventListener('click', deleteCurrentKeyframe);
 $('#prevKeyBtn').addEventListener('click', () => jumpKey(-1));
 $('#nextKeyBtn').addEventListener('click', () => jumpKey(1));
 $('#playAnimBtn').addEventListener('click', startAnimation);
@@ -863,6 +1047,7 @@ function startIkDrag(pointerId, startClientX, startClientY, sourceEl) {
   const chain = currentIkChain();
   if (!state.ikMode || !chain) return false;
   pushHistory();
+  markSelectedKeyPoseDirty();
   const move = e => {
     const point = pointerToArea(e.clientX, e.clientY);
     solveIkTo(point.x, point.y);
@@ -895,6 +1080,7 @@ $('#flipIkBtn').addEventListener('click', () => {
   refreshIkUi();
   if (state.ikMode) {
     pushHistory();
+    markSelectedKeyPoseDirty();
     solveIkTo(state.ikTarget.x, state.ikTarget.y);
     markChanged('IKの曲げ向きを反転');
   }
@@ -959,6 +1145,7 @@ function onPartPointerDown(event) {
   stopAnimation(true);
   commitAnimationPreview();
   pushHistory();
+  markSelectedKeyPoseDirty();
   const sx = event.clientX, sy = event.clientY;
   const ox = part.x, oy = part.y;
   const parent = part.parentId ? partById(part.parentId) : null;
@@ -1036,6 +1223,7 @@ function nudgeSelected(dx, dy) {
   stopAnimation(true);
   commitAnimationPreview();
   pushHistory();
+  if (!state.pivotMode) markSelectedKeyPoseDirty();
   if (state.pivotMode) {
     setPivotPreservePose(part, part.pivotX + dx, part.pivotY + dy);
     applyAllPartStyles(); syncInspector(); markChanged('ピボットを1px移動'); return;
@@ -1049,6 +1237,7 @@ function rotateSelected(delta) {
   stopAnimation(true);
   commitAnimationPreview();
   pushHistory();
+  markSelectedKeyPoseDirty();
   part.rotation += delta;
   applyAllPartStyles(); syncInspector(); markChanged(`${delta > 0 ? '+' : ''}${delta}°回転`);
 }
@@ -1059,7 +1248,7 @@ $$('.rotate-btn', controlPanel).forEach(button => button.addEventListener('click
 characterArea.addEventListener('pointerdown', event => {
   if (event.target !== characterArea && !event.target.classList.contains('character-area-label')) return;
   if (state.pivotMode || state.testRunning) return;
-  event.preventDefault(); stopAnimation(true); commitAnimationPreview(); pushHistory();
+  event.preventDefault(); stopAnimation(true); commitAnimationPreview(); pushHistory(); markSelectedKeyPoseDirty();
   const sx = event.clientX, sy = event.clientY;
   const ox = state.area.x, oy = state.area.y;
   characterArea.setPointerCapture?.(event.pointerId);
@@ -1216,7 +1405,8 @@ numpadBackdrop.addEventListener('pointerdown', e => { if (e.target === numpadBac
 function applyNumericInput(id) {
   const v = int(inputs[id]?.value, 0);
   if (['testAmplitude','testDuration','testChildScale','testDelay'].includes(id)) return;
-  if (id === 'animTime') { setAnimationTime(v, true); return; }
+  if (id === 'selectedKeyTime') { setSelectedKeyDraftTime(v); return; }
+  if (id === 'animTime') { clearKeySelection(); setAnimationTime(v, true); return; }
   if (id === 'animDuration') {
     stopAnimation(true); pushHistory();
     state.animation.duration = Math.max(100, Math.abs(v));
@@ -1231,7 +1421,7 @@ function applyNumericInput(id) {
   if (id === 'stageWidth' || id === 'stageHeight') return;
   if (id.startsWith('area')) {
     if (state.pivotMode || state.testRunning) return;
-    stopAnimation(true); commitAnimationPreview(); pushHistory();
+    stopAnimation(true); commitAnimationPreview(); pushHistory(); markSelectedKeyPoseDirty();
     state.area.x = id === 'areaX' ? v : state.area.x;
     state.area.y = id === 'areaY' ? v : state.area.y;
     state.area.width = id === 'areaW' ? Math.max(40, v) : state.area.width;
@@ -1246,6 +1436,7 @@ function applyNumericInput(id) {
   if (!key) return;
   if (state.pivotMode && !['pivotX','pivotY'].includes(key)) return;
   pushHistory();
+  if (!['pivotX','pivotY'].includes(key)) markSelectedKeyPoseDirty();
   if (key === 'pivotX') setPivotPreservePose(part, v, part.pivotY);
   else if (key === 'pivotY') setPivotPreservePose(part, part.pivotX, v);
   else part[key] = key === 'width' ? Math.max(1, v) : v;
@@ -1356,7 +1547,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 9,
+    version: 10,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     parts: [...state.parts].sort((a,b) => a.order - b.order).map(p => ({
