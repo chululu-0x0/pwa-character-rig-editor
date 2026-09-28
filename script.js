@@ -146,7 +146,15 @@ function restoreSnapshot(snap) {
   state.area = { ...snap.area };
   state.parts = snap.parts.map(p => ({ ...p }));
   state.selectedId = snap.selectedId && state.parts.some(p => p.id === snap.selectedId) ? snap.selectedId : (state.parts.at(-1)?.id || null);
-  syncStage(); syncArea(); renderParts(); updateHistoryButtons();
+  // ---------- v7: prevent accidental browser gestures in the editor ----------
+// CSS touch-action handles normal double-tap zoom. These event guards cover
+// Safari long-press callouts/text selection and older edge cases.
+document.addEventListener('contextmenu', event => event.preventDefault());
+document.addEventListener('selectstart', event => event.preventDefault());
+document.addEventListener('dragstart', event => event.preventDefault());
+document.addEventListener('dblclick', event => event.preventDefault(), { passive: false });
+
+syncStage(); syncArea(); renderParts(); updateHistoryButtons();
 }
 function pushHistory() {
   state.undoStack.push(snapshot());
@@ -790,7 +798,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 6,
+    version: 7,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     parts: [...state.parts].sort((a,b) => a.order - b.order).map(p => ({
@@ -820,13 +828,64 @@ $('#copyJsonBtn').addEventListener('click', async () => {
   catch { jsonPreview.select(); document.execCommand('copy'); }
   statusText.textContent = '座標コピー済み';
 });
-$('#downloadJsonBtn').addEventListener('click', () => {
-  const blob = new Blob([jsonText()], {type:'application/json'});
+async function saveJsonWithDestination() {
+  const fileName = 'character-coordinates.json';
+  const text = jsonText();
+  const blob = new Blob([text], { type: 'application/json' });
+
+  // Chromium on PC: native save picker lets the user choose folder + filename.
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{
+          description: 'JSON ファイル',
+          accept: { 'application/json': ['.json'] }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      statusText.textContent = '指定先へ座標保存済み';
+      return;
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        statusText.textContent = '保存をキャンセル';
+        return;
+      }
+      console.warn('showSaveFilePicker failed; trying share/download fallback.', error);
+    }
+  }
+
+  // iPad/iPhone Safari: invoke the native share sheet.
+  // Choosing 「ファイルに保存」 there lets the user pick a folder in Files.
+  try {
+    const file = new File([text], fileName, { type: 'application/json' });
+    if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+      await navigator.share({ files: [file], title: 'キャラクター座標JSON' });
+      statusText.textContent = '共有/保存先を選択済み';
+      return;
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      statusText.textContent = '保存をキャンセル';
+      return;
+    }
+    console.warn('Web Share failed; using download fallback.', error);
+  }
+
+  // Last-resort fallback for browsers without either API.
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'character-coordinates.json'; a.click();
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
-  statusText.textContent = '座標保存済み';
-});
+  statusText.textContent = '標準ダウンロードで座標保存済み';
+}
+$('#downloadJsonBtn').addEventListener('click', saveJsonWithDestination);
 
 // ---------- import saved coordinates ----------
 function findCurrentPartForSaved(saved, unusedIds) {
@@ -971,5 +1030,13 @@ window.addEventListener('beforeunload', () => {
   if (state.backgroundUrl) URL.revokeObjectURL(state.backgroundUrl);
   state.liveObjectUrls.forEach(url => URL.revokeObjectURL(url));
 });
+
+// ---------- v7: prevent accidental browser gestures in the editor ----------
+// CSS touch-action handles normal double-tap zoom. These event guards cover
+// Safari long-press callouts/text selection and older edge cases.
+document.addEventListener('contextmenu', event => event.preventDefault());
+document.addEventListener('selectstart', event => event.preventDefault());
+document.addEventListener('dragstart', event => event.preventDefault());
+document.addEventListener('dblclick', event => event.preventDefault(), { passive: false });
 
 syncStage(); syncArea(); renderParts(); updateHistoryButtons();

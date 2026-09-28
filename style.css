@@ -10,6 +10,22 @@
   --shadow: 0 10px 30px rgba(55,45,35,.13);
 }
 * { box-sizing: border-box; }
+/* v7: editor gesture guards */
+html, body {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+body, body * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+img, button, .file-button, .floating-panel, .stage, .character-area, .rig-part {
+  -webkit-tap-highlight-color: transparent;
+}
+
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; min-height: 100vh; background: linear-gradient(#f7f3ee,#eee7df); }
 button,input,select,textarea { font: inherit; }
