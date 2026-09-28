@@ -399,3 +399,49 @@ body.animation-playing #ikTarget { display: none !important; }
   .timeline-panel { left: 12px; width: calc(100vw - 24px); min-width: 0; }
   .track-row { grid-template-columns: 104px minmax(180px,1fr); }
 }
+
+/* v12: group-first workflow */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 8000;
+  background: rgba(247,243,238,.96);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(215,206,197,.85);
+  box-shadow: 0 4px 14px rgba(55,45,35,.06);
+}
+.toolbar-select { display:flex; align-items:center; gap:5px; font-size:10px; color:#625851; }
+.toolbar-select select { width:128px; margin:0; padding:7px 24px 7px 8px; }
+.group-switch-row {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 34px;
+  gap:5px;
+  padding:6px;
+  border-bottom:1px solid #ddd3ca;
+  background:#faf7f3;
+}
+.group-switch-row select { margin:0; padding:5px 24px 5px 7px; font-size:10px; min-width:0; }
+.group-switch-row button { padding:0; min-height:29px; border-radius:7px; box-shadow:none; }
+.layer-panel { width:220px; }
+.layer-list { max-height:278px; }
+.ik-flip-btn { min-height:43px; padding:6px 8px; font-size:18px; }
+.ik-flip-btn span { display:block; font-size:9px; }
+.ik-flip-btn:not(:disabled) { background:#eef7fb; border-color:#97cadd; color:#276b86; }
+
+.timeline-panel {
+  width:min(700px, calc(100vw - 300px));
+  min-width:500px;
+  max-height:min(270px, calc(100vh - 90px));
+}
+.track-viewport { max-height:82px; }
+.track-row { grid-template-columns:110px minmax(220px,1fr); }
+.track-label { font-weight:700; }
+.track-row.selected-part .track-label::before { content:'● '; font-size:8px; }
+.timeline-help { max-height:26px; }
+.track-toolbar { justify-content:space-between; }
+.track-hint { flex:1; }
+
+@media (max-width:1000px) {
+  .timeline-panel { left:12px; width:calc(100vw - 24px); min-width:0; }
+  .track-row { grid-template-columns:96px minmax(180px,1fr); }
+}

@@ -6,11 +6,15 @@ const stageEmpty = $('#stageEmpty');
 const backgroundInput = $('#backgroundInput');
 const backgroundImage = $('#backgroundImage');
 const partInput = $('#partInput');
+const partGroupSelect = $('#partGroupSelect');
+const newGroupBtn = $('#newGroupBtn');
 const importJsonInput = $('#importJsonInput');
 const partTemplate = $('#partTemplate');
 const characterArea = $('#characterArea');
 const parentSelect = $('#parentSelect');
 const layerList = $('#layerList');
+const layerGroupSelect = $('#layerGroupSelect');
+const layerNewGroupBtn = $('#layerNewGroupBtn');
 const hierarchyTree = $('#hierarchyTree');
 const controlPanel = $('#controlPanel');
 const layerPanel = $('#layerPanel');
@@ -21,6 +25,7 @@ const jsonPreview = $('#jsonPreview');
 const selectedCoord = $('#selectedCoord');
 const selectedName = $('#selectedName');
 const controlModeText = $('#controlModeText');
+const controlFlipIkBtn = $('#controlFlipIkBtn');
 const undoBtn = $('#undoBtn');
 const redoBtn = $('#redoBtn');
 const ikTarget = $('#ikTarget');
@@ -30,7 +35,6 @@ const animationPanel = $('#animationPanel');
 const timelineSlider = $('#timelineSlider');
 const trackList = $('#trackList');
 const trackViewport = $('#trackViewport');
-const trackViewMode = $('#trackViewMode');
 const timelineBody = $('#timelineBody');
 const timelineEndLabel = $('#timelineEndLabel');
 const animStatus = $('#animStatus');
@@ -41,7 +45,6 @@ const keyEditStatus = $('#keyEditStatus');
 const overwriteKeyBtn = $('#overwriteKeyBtn');
 const duplicateKeyBtn = $('#duplicateKeyBtn');
 const deleteKeyBtn = $('#deleteKeyBtn');
-const keyScope = $('#keyScope');
 const timelineCollapseBtn = $('#timelineCollapseBtn');
 const trackRowsToggleBtn = $('#trackRowsToggleBtn');
 
@@ -49,6 +52,8 @@ const state = {
   stage: { width: 390, height: 844 },
   area: { x: 12, y: 18, width: 160, height: 220 },
   parts: [],
+  groups: [{ id:'group-default', name:'未分類' }],
+  activeGroupId: 'group-default',
   selectedId: null,
   pivotMode: false,
   backgroundUrl: '',
@@ -63,8 +68,8 @@ const state = {
     name: 'walk01', duration: 1000, loop: true, currentTime: 0,
     tracks: {}, areaKeys: [], playing: false, raf: 0, playStartedAt: 0, playStartTime: 0,
     previewActive: false, previewPose: null,
-    selectedTrackId: null, selectedKeyId: null, keyDraftTime: null, keyDirty: false,
-    trackViewMode: 'focus', timelineCollapsed: false, tracksHidden: false
+    selectedGroupId: null, selectedKeyTime: null, keyDraftTime: null, keyDirty: false,
+    timelineCollapsed: false, tracksHidden: false
   },
   liveObjectUrls: new Set(),
   undoStack: [],
@@ -181,104 +186,114 @@ function decomposeLocalMatrixIntoPart(part, m) {
 
 
 
-// ---------- animation / per-part tracks ----------
+// ---------- groups + animation / group tracks ----------
+function makeGroupId() { return `group-${Date.now()}-${Math.random().toString(36).slice(2,7)}`; }
+function ensureGroups() {
+  if (!Array.isArray(state.groups) || !state.groups.length) state.groups = [{ id:'group-default', name:'未分類' }];
+  const ids = new Set(state.groups.map(g => g.id));
+  state.parts.forEach(p => { if (!p.groupId || !ids.has(p.groupId)) p.groupId = state.groups[0].id; });
+  if (!state.activeGroupId || !ids.has(state.activeGroupId)) state.activeGroupId = state.groups[0].id;
+}
+function groupById(id) { ensureGroups(); return state.groups.find(g => g.id === id) || null; }
+function activeGroup() { return groupById(state.activeGroupId); }
+function partsInGroup(groupId) { return state.parts.filter(p => p.groupId === groupId).sort((a,b)=>a.order-b.order); }
+function refreshGroupSelects() {
+  ensureGroups();
+  [partGroupSelect, layerGroupSelect].forEach(select => {
+    if (!select) return;
+    const previous = select === partGroupSelect ? (select.value || state.activeGroupId) : state.activeGroupId;
+    select.innerHTML = '';
+    state.groups.forEach(g => {
+      const option = document.createElement('option'); option.value = g.id; option.textContent = g.name; select.appendChild(option);
+    });
+    select.value = state.groups.some(g=>g.id===previous) ? previous : state.activeGroupId;
+  });
+  if (layerGroupSelect) layerGroupSelect.value = state.activeGroupId;
+}
+function switchActiveGroup(groupId) {
+  ensureGroups();
+  if (!groupById(groupId)) return;
+  state.activeGroupId = groupId;
+  if (partGroupSelect) partGroupSelect.value = groupId;
+  if (layerGroupSelect) layerGroupSelect.value = groupId;
+  const members = partsInGroup(groupId);
+  if (!selectedPart() || selectedPart().groupId !== groupId) state.selectedId = members[0]?.id || null;
+  clearKeySelection(false);
+  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi(); renderTrackList();
+  markChanged(`グループ: ${groupById(groupId)?.name || ''}`);
+}
+function createGroupFromUi() {
+  const name = (window.prompt('新しいグループ名', '新規グループ') || '').trim();
+  if (!name) return;
+  pushHistory();
+  const group = { id:makeGroupId(), name };
+  state.groups.push(group); state.activeGroupId = group.id;
+  refreshGroupSelects(); switchActiveGroup(group.id);
+  markChanged(`グループ作成: ${name}`);
+}
+
 function freshAnimation() {
   return {
     name: 'walk01', duration: 1000, loop: true, currentTime: 0,
     tracks: {}, areaKeys: [], playing: false, raf: 0, playStartedAt: 0, playStartTime: 0,
     previewActive: false, previewPose: null,
-    selectedTrackId: null, selectedKeyId: null, keyDraftTime: null, keyDirty: false,
-    trackViewMode: 'focus', timelineCollapsed: false, tracksHidden: false
+    selectedGroupId: null, selectedKeyTime: null, keyDraftTime: null, keyDirty: false,
+    timelineCollapsed: false, tracksHidden: false
   };
 }
 function cloneTrackKey(key) { return { ...key }; }
 function cloneAreaKey(key) { return { ...key }; }
-function cloneTrack(track) {
-  return { partId:track.partId, fileName:track.fileName, name:track.name, keys:(track.keys||[]).map(cloneTrackKey) };
-}
+function cloneTrack(track) { return { partId:track.partId, fileName:track.fileName, name:track.name, keys:(track.keys||[]).map(cloneTrackKey) }; }
 function animationForSnapshot() {
-  const a = state.animation;
-  const tracks = {};
+  const a = state.animation; const tracks = {};
   Object.entries(a.tracks || {}).forEach(([id, track]) => tracks[id] = cloneTrack(track));
   return {
     name:a.name, duration:a.duration, loop:a.loop, currentTime:a.currentTime,
     tracks, areaKeys:(a.areaKeys||[]).map(cloneAreaKey),
-    selectedTrackId:a.selectedTrackId || null, selectedKeyId:a.selectedKeyId || null,
+    selectedGroupId:a.selectedGroupId || null, selectedKeyTime:a.selectedKeyTime,
     keyDraftTime:a.keyDraftTime, keyDirty:!!a.keyDirty,
-    trackViewMode:a.trackViewMode || 'focus', timelineCollapsed:!!a.timelineCollapsed, tracksHidden:!!a.tracksHidden
+    timelineCollapsed:!!a.timelineCollapsed, tracksHidden:!!a.tracksHidden
   };
 }
 function ensureTrack(part) {
   if (!part) return null;
   let track = state.animation.tracks[part.id];
-  if (!track) {
-    track = { partId:part.id, fileName:part.fileName, name:part.name, keys:[] };
-    state.animation.tracks[part.id] = track;
-  }
-  track.fileName = part.fileName;
-  track.name = part.name;
-  return track;
+  if (!track) { track = { partId:part.id, fileName:part.fileName, name:part.name, keys:[] }; state.animation.tracks[part.id] = track; }
+  track.fileName = part.fileName; track.name = part.name; return track;
 }
 function trackForPart(part) { return part ? state.animation.tracks[part.id] || null : null; }
 function sortedTrackKeys(track) { return [...(track?.keys || [])].sort((a,b)=>a.time-b.time); }
 function totalTrackKeyCount() { return Object.values(state.animation.tracks || {}).reduce((n,t)=>n+(t.keys?.length||0),0); }
-function selectedTrack() { return state.animation.selectedTrackId ? state.animation.tracks[state.animation.selectedTrackId] || null : null; }
-function selectedTrackKey() {
-  const track = selectedTrack();
-  return track?.keys?.find(k => k.id === state.animation.selectedKeyId) || null;
+function groupKeyTimes(groupId) {
+  const times=[]; partsInGroup(groupId).forEach(part => (trackForPart(part)?.keys||[]).forEach(k=>times.push(Math.round(k.time))));
+  return [...new Set(times)].sort((a,b)=>a-b);
+}
+function groupHasKeyAt(groupId,time,ignoreTime=null) {
+  return groupKeyTimes(groupId).some(t => Math.abs(t-time)<=1 && (ignoreTime==null || Math.abs(t-ignoreTime)>1));
 }
 function capturePartPose(part) {
   if (state.animation.previewActive && state.animation.previewPose) {
-    const pp = state.animation.previewPose.parts.get(part.id);
-    if (pp) return { x:pp.x,y:pp.y,width:pp.width,rotation:pp.rotation };
+    const pp = state.animation.previewPose.parts.get(part.id); if (pp) return { x:pp.x,y:pp.y,width:pp.width,rotation:pp.rotation };
   }
   return { x:part.x,y:part.y,width:part.width,rotation:part.rotation };
 }
-function poseFromState() {
-  return {
-    area:{x:state.area.x,y:state.area.y},
-    parts:new Map(state.parts.map(part => [part.id, capturePartPose(part)]))
-  };
-}
 function interpolateKeyValues(keys, time, fallback) {
-  const sorted=[...(keys||[])].sort((a,b)=>a.time-b.time);
-  if (!sorted.length) return {...fallback};
-  const t=clamp(time,0,state.animation.duration);
-  let a=sorted[0], b=sorted[sorted.length-1];
-  if (t<a.time) return {...fallback};
-  if (t===a.time) b=a;
-  else if (t>=b.time) a=b;
-  else {
-    for(let i=0;i<sorted.length-1;i++) if(t>=sorted[i].time && t<=sorted[i+1].time){a=sorted[i];b=sorted[i+1];break;}
-  }
+  const sorted=[...(keys||[])].sort((a,b)=>a.time-b.time); if (!sorted.length) return {...fallback};
+  const t=clamp(time,0,state.animation.duration); let a=sorted[0], b=sorted[sorted.length-1];
+  if (t<a.time) return {...fallback}; if (t===a.time) b=a; else if (t>=b.time) a=b; else { for(let i=0;i<sorted.length-1;i++) if(t>=sorted[i].time && t<=sorted[i+1].time){a=sorted[i];b=sorted[i+1];break;} }
   const span=Math.max(1,b.time-a.time), f=a===b?0:clamp((t-a.time)/span,0,1);
-  return {
-    x:lerp(num(a.x,fallback.x),num(b.x,a.x),f),
-    y:lerp(num(a.y,fallback.y),num(b.y,a.y),f),
-    width:lerp(num(a.width,fallback.width),num(b.width,a.width),f),
-    rotation:lerpAngle(num(a.rotation,fallback.rotation),num(b.rotation,a.rotation),f)
-  };
+  return { x:lerp(num(a.x,fallback.x),num(b.x,a.x),f), y:lerp(num(a.y,fallback.y),num(b.y,a.y),f), width:lerp(num(a.width,fallback.width),num(b.width,a.width),f), rotation:lerpAngle(num(a.rotation,fallback.rotation),num(b.rotation,a.rotation),f) };
 }
 function interpolateAreaAt(time) {
-  const keys=[...(state.animation.areaKeys||[])].sort((a,b)=>a.time-b.time);
-  if(!keys.length) return {x:state.area.x,y:state.area.y};
-  const t=clamp(time,0,state.animation.duration);
-  let a=keys[0], b=keys[keys.length-1];
-  if(t<a.time)return {x:state.area.x,y:state.area.y};
-  if(t===a.time)b=a; else if(t>=b.time)a=b; else {
-    for(let i=0;i<keys.length-1;i++) if(t>=keys[i].time&&t<=keys[i+1].time){a=keys[i];b=keys[i+1];break;}
-  }
-  const span=Math.max(1,b.time-a.time), f=a===b?0:clamp((t-a.time)/span,0,1);
-  return {x:lerp(a.x,b.x,f),y:lerp(a.y,b.y,f)};
+  const keys=[...(state.animation.areaKeys||[])].sort((a,b)=>a.time-b.time); if(!keys.length) return {x:state.area.x,y:state.area.y};
+  const t=clamp(time,0,state.animation.duration); let a=keys[0], b=keys[keys.length-1];
+  if(t<a.time)return {x:state.area.x,y:state.area.y}; if(t===a.time)b=a; else if(t>=b.time)a=b; else { for(let i=0;i<keys.length-1;i++) if(t>=keys[i].time&&t<=keys[i+1].time){a=keys[i];b=keys[i+1];break;} }
+  const span=Math.max(1,b.time-a.time), f=a===b?0:clamp((t-a.time)/span,0,1); return {x:lerp(a.x,b.x,f),y:lerp(a.y,b.y,f)};
 }
 function interpolatedPoseAt(time) {
   if (!totalTrackKeyCount() && !(state.animation.areaKeys||[]).length) return null;
   const pose={area:interpolateAreaAt(time),parts:new Map()};
-  state.parts.forEach(part=>{
-    const fallback={x:part.x,y:part.y,width:part.width,rotation:part.rotation};
-    const track=trackForPart(part);
-    pose.parts.set(part.id, interpolateKeyValues(track?.keys||[],time,fallback));
-  });
+  state.parts.forEach(part=>{ const fallback={x:part.x,y:part.y,width:part.width,rotation:part.rotation}; const track=trackForPart(part); pose.parts.set(part.id, interpolateKeyValues(track?.keys||[],time,fallback)); });
   return pose;
 }
 function localMatrixFromPose(part, pose) {
@@ -287,129 +302,111 @@ function localMatrixFromPose(part, pose) {
 }
 function worldMatrixFromPose(part, poseMap, cache=new Map()) {
   if(!part)return identity(); if(cache.has(part.id))return cache.get(part.id);
-  const local=localMatrixFromPose(part,poseMap?.get(part.id));
-  const parent=part.parentId?partById(part.parentId):null;
-  const result=parent?multiply(worldMatrixFromPose(parent,poseMap,cache),local):local;
-  cache.set(part.id,result); return result;
+  const local=localMatrixFromPose(part,poseMap?.get(part.id)); const parent=part.parentId?partById(part.parentId):null;
+  const result=parent?multiply(worldMatrixFromPose(parent,poseMap,cache),local):local; cache.set(part.id,result); return result;
 }
 function applyPreviewPose(pose) {
-  if(!pose)return;
-  characterArea.style.left=`${pose.area.x}px`; characterArea.style.top=`${pose.area.y}px`;
-  const cache=new Map();
-  state.parts.forEach(part=>{
-    const node=getPartNode(part.id); if(!node)return;
-    const pp=pose.parts.get(part.id), m=worldMatrixFromPose(part,pose.parts,cache);
-    node.style.width=`${pp?.width??part.width}px`; node.style.transformOrigin='0 0';
-    node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
-    node.style.zIndex=String(part.order||1); node.classList.toggle('hidden-layer',!part.visible);
-  });
+  if(!pose)return; characterArea.style.left=`${pose.area.x}px`; characterArea.style.top=`${pose.area.y}px`; const cache=new Map();
+  state.parts.forEach(part=>{ const node=getPartNode(part.id); if(!node)return; const pp=pose.parts.get(part.id), m=worldMatrixFromPose(part,pose.parts,cache); node.style.width=`${pp?.width??part.width}px`; node.style.transformOrigin='0 0'; node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`; node.style.zIndex=String(part.order||1); node.classList.toggle('hidden-layer',!part.visible); });
 }
 function applyAnimationPreview(time,{renderTracks=false}={}) {
-  const pose=interpolatedPoseAt(time);
-  state.animation.currentTime=clamp(time,0,state.animation.duration);
-  syncTimelineReadout();
+  const pose=interpolatedPoseAt(time); state.animation.currentTime=clamp(time,0,state.animation.duration); syncTimelineReadout();
   if(!pose){state.animation.previewActive=false;state.animation.previewPose=null;syncArea();applyAllPartStyles();return;}
-  state.animation.previewActive=true;state.animation.previewPose=pose;applyPreviewPose(pose);syncInspector();
-  if(renderTracks)renderTrackList();
+  state.animation.previewActive=true;state.animation.previewPose=pose;applyPreviewPose(pose);syncInspector(); if(renderTracks)renderTrackList();
 }
 function commitAnimationPreview() {
-  if(!state.animation.previewActive||!state.animation.previewPose)return false;
-  const pose=state.animation.previewPose;
-  state.area.x=pose.area.x;state.area.y=pose.area.y;
-  state.parts.forEach(part=>{const pp=pose.parts.get(part.id);if(!pp)return;part.x=pp.x;part.y=pp.y;part.width=pp.width;part.rotation=pp.rotation;});
+  if(!state.animation.previewActive||!state.animation.previewPose)return false; const pose=state.animation.previewPose;
+  state.area.x=pose.area.x;state.area.y=pose.area.y; state.parts.forEach(part=>{const pp=pose.parts.get(part.id);if(!pp)return;part.x=pp.x;part.y=pp.y;part.width=pp.width;part.rotation=pp.rotation;});
   state.animation.previewActive=false;state.animation.previewPose=null;syncArea();applyAllPartStyles();syncInspector();return true;
 }
 function clearAnimationPreview({restore=true}={}) {state.animation.previewActive=false;state.animation.previewPose=null;if(restore){syncArea();applyAllPartStyles();syncInspector();}}
-function clearKeySelection(){state.animation.selectedTrackId=null;state.animation.selectedKeyId=null;state.animation.keyDraftTime=null;state.animation.keyDirty=false;syncKeyEditUi();renderTrackList();}
-function selectedKeyDisplayTime(key){return key&&key.id===state.animation.selectedKeyId&&state.animation.keyDraftTime!=null?state.animation.keyDraftTime:key?.time??0;}
-function selectTrackKey(partId,key,{preview=true}={}){
-  if(!key)return clearKeySelection(); stopAnimation(true);
-  state.animation.selectedTrackId=partId;state.animation.selectedKeyId=key.id;state.animation.keyDraftTime=Math.round(key.time);state.animation.keyDirty=false;state.animation.currentTime=key.time;
-  if(partId&&partById(partId))state.selectedId=partId;
-  if(preview)applyAnimationPreview(key.time);
-  renderLayers();renderHierarchy();refreshParentSelect();syncInspector();syncKeyEditUi();syncTimelineReadout();renderTrackList();
+function clearKeySelection(render=true){state.animation.selectedGroupId=null;state.animation.selectedKeyTime=null;state.animation.keyDraftTime=null;state.animation.keyDirty=false;syncKeyEditUi();if(render)renderTrackList();}
+function selectGroupKey(groupId,time,{preview=true}={}) {
+  stopAnimation(true); state.animation.selectedGroupId=groupId;state.animation.selectedKeyTime=Math.round(time);state.animation.keyDraftTime=Math.round(time);state.animation.keyDirty=false;state.animation.currentTime=time;
+  state.activeGroupId=groupId;refreshGroupSelects(); const members=partsInGroup(groupId); if(!selectedPart()||selectedPart().groupId!==groupId)state.selectedId=members[0]?.id||null;
+  if(preview)applyAnimationPreview(time); renderLayers();renderHierarchy();refreshParentSelect();syncInspector();syncKeyEditUi();syncTimelineReadout();renderTrackList();
 }
-function setSelectedKeyDirty(dirty=true){if(!selectedTrackKey())return;state.animation.keyDirty=!!dirty;syncKeyEditUi();renderTrackList();}
-function markSelectedKeyPoseDirty(){if(!selectedTrackKey())return;setSelectedKeyDirty(true);}
+function hasSelectedGroupKey(){return !!state.animation.selectedGroupId && state.animation.selectedKeyTime!=null;}
+function setSelectedKeyDirty(dirty=true){if(!hasSelectedGroupKey())return;state.animation.keyDirty=!!dirty;syncKeyEditUi();renderTrackList();}
+function markSelectedKeyPoseDirty(){if(!hasSelectedGroupKey())return;setSelectedKeyDirty(true);}
 function syncKeyEditUi(){
-  const key=selectedTrackKey(), track=selectedTrack(), has=!!key, draft=has?Math.round(state.animation.keyDraftTime??key.time):0;
+  const has=hasSelectedGroupKey(), group=groupById(state.animation.selectedGroupId), original=has?Math.round(state.animation.selectedKeyTime):0, draft=has?Math.round(state.animation.keyDraftTime??original):0;
   inputs.selectedKeyTime.disabled=!has;inputs.selectedKeyTime.value=draft;overwriteKeyBtn.disabled=!has;duplicateKeyBtn.disabled=!has;deleteKeyBtn.disabled=!has;
-  if(!has){selectedKeyLabel.textContent='キー未選択';keyEditStatus.textContent='トラック上の◆を選択';keyEditStatus.classList.remove('dirty');return;}
-  selectedKeyLabel.textContent=`${track?.name||'パーツ'} ${key.time}ms`;
-  if(state.animation.keyDirty){keyEditStatus.textContent=`未確定 → ${draft}ms`;keyEditStatus.classList.add('dirty');}
-  else{keyEditStatus.textContent='登録内容と同じ';keyEditStatus.classList.remove('dirty');}
+  if(!has){selectedKeyLabel.textContent='キー未選択';keyEditStatus.textContent='グループ行の◆を選択';keyEditStatus.classList.remove('dirty');return;}
+  selectedKeyLabel.textContent=`${group?.name||'グループ'} ${original}ms`;
+  if(state.animation.keyDirty){keyEditStatus.textContent=`未確定 → ${draft}ms`;keyEditStatus.classList.add('dirty');} else {keyEditStatus.textContent='登録内容と同じ';keyEditStatus.classList.remove('dirty');}
 }
-function setSelectedKeyDraftTime(time){const key=selectedTrackKey();if(!key)return;const t=Math.round(clamp(num(time,key.time),0,state.animation.duration));state.animation.keyDraftTime=t;state.animation.currentTime=t;state.animation.keyDirty=t!==Math.round(key.time)||state.animation.keyDirty;syncTimelineReadout();syncKeyEditUi();renderTrackList();}
-function descendantsOf(id){const out=[];const walk=pid=>state.parts.filter(p=>p.parentId===pid).forEach(c=>{out.push(c);walk(c.id);});walk(id);return out;}
-function scopeParts(){
-  const selected=selectedPart(); if(!selected)return [];
-  const mode=keyScope?.value||'selected';
-  if(mode==='all')return [...state.parts];
-  if(mode==='children')return [selected,...descendantsOf(selected.id)];
-  if(mode==='ik'){const chain=currentIkChain();return chain?[chain.upper,chain.lower,chain.end]:[selected];}
-  return [selected];
+function setSelectedKeyDraftTime(time){if(!hasSelectedGroupKey())return;const original=state.animation.selectedKeyTime;const t=Math.round(clamp(num(time,original),0,state.animation.duration));state.animation.keyDraftTime=t;state.animation.currentTime=t;state.animation.keyDirty=t!==Math.round(original)||state.animation.keyDirty;syncTimelineReadout();syncKeyEditUi();renderTrackList();}
+function writePartKey(part,time,pose,{replace=true}={}) {
+  const track=ensureTrack(part); const existing=track.keys.find(k=>Math.abs(k.time-time)<=1);
+  if(existing && replace) Object.assign(existing,{time,...pose});
+  else if(!existing) track.keys.push({id:`key-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time,...pose});
+  track.keys.sort((a,b)=>a.time-b.time); return existing || track.keys.find(k=>Math.abs(k.time-time)<=1);
 }
 function addNewKeyframe(){
-  stopAnimation(true); const t=Math.round(state.animation.currentTime), targets=scopeParts();
-  if(!targets.length){animStatus.textContent='パーツを選択';return;}
-  commitAnimationPreview(); pushHistory(); let added=[];
-  targets.forEach(part=>{const track=ensureTrack(part);if(track.keys.some(k=>Math.abs(k.time-t)<=1))return;const pose=capturePartPose(part);const key={id:`key-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:t,...pose};track.keys.push(key);track.keys.sort((a,b)=>a.time-b.time);added.push({part,track,key});});
-  if((keyScope?.value||'')==='all'&&!state.animation.areaKeys.some(k=>Math.abs(k.time-t)<=1))state.animation.areaKeys.push({id:`area-${Date.now()}`,time:t,x:state.area.x,y:state.area.y});
-  if(!added.length){animStatus.textContent=`${t}msには対象トラックのキーがあります`;return;}
-  const preferred=added.find(x=>x.part.id===state.selectedId)||added[0];selectTrackKey(preferred.part.id,preferred.key,{preview:false});syncAnimationUi();markChanged(`${added.length}トラックへキー追加 ${t}ms`);
+  stopAnimation(true); ensureGroups(); const group=activeGroup(), targets=partsInGroup(state.activeGroupId), t=Math.round(state.animation.currentTime);
+  if(!group||!targets.length){animStatus.textContent='現在のグループにパーツがありません';return;}
+  if(groupHasKeyAt(group.id,t)){selectGroupKey(group.id,t);animStatus.textContent=`${group.name} ${t}ms は登録済み`;return;}
+  commitAnimationPreview();pushHistory();targets.forEach(part=>writePartKey(part,t,capturePartPose(part),{replace:false}));selectGroupKey(group.id,t,{preview:false});syncAnimationUi();markChanged(`${group.name} グループキー登録 ${t}ms`);
 }
 function overwriteSelectedKeyframe(){
-  const track=selectedTrack(),key=selectedTrackKey();if(!track||!key){animStatus.textContent='上書きするキーを選択';return;}
-  const part=partById(track.partId);if(!part){animStatus.textContent='対象パーツがありません';return;}
-  stopAnimation(true);const t=Math.round(state.animation.keyDraftTime??key.time);const collision=track.keys.find(k=>k.id!==key.id&&Math.abs(k.time-t)<=1);if(collision){animStatus.textContent=`${t}msには同じトラックの別キーがあります`;return;}
-  commitAnimationPreview();pushHistory();const pose=capturePartPose(part);Object.assign(key,pose,{time:t});track.keys.sort((a,b)=>a.time-b.time);state.animation.currentTime=t;state.animation.keyDraftTime=t;state.animation.keyDirty=false;applyAnimationPreview(t);syncAnimationUi();markChanged(`${part.name} キー上書き ${t}ms`);
+  if(!hasSelectedGroupKey()){animStatus.textContent='上書きするグループキーを選択';return;}
+  const groupId=state.animation.selectedGroupId, group=groupById(groupId), original=Math.round(state.animation.selectedKeyTime), t=Math.round(state.animation.keyDraftTime??original), targets=partsInGroup(groupId);
+  if(groupHasKeyAt(groupId,t,original)){animStatus.textContent=`${t}msには同グループの別キーがあります`;return;}
+  stopAnimation(true);commitAnimationPreview();pushHistory();
+  targets.forEach(part=>{const track=ensureTrack(part);track.keys=track.keys.filter(k=>Math.abs(k.time-original)>1);writePartKey(part,t,capturePartPose(part),{replace:true});});
+  state.animation.selectedKeyTime=t;state.animation.keyDraftTime=t;state.animation.keyDirty=false;state.animation.currentTime=t;applyAnimationPreview(t);syncAnimationUi();markChanged(`${group?.name||'グループ'} キー上書き ${t}ms`);
 }
-function findDuplicateTime(track,sourceTime){const occupied=new Set((track.keys||[]).map(k=>Math.round(k.time))),duration=Math.round(state.animation.duration);for(const c of [sourceTime+100,sourceTime-100]){const t=Math.round(clamp(c,0,duration));if(!occupied.has(t))return t;}for(let d=1;d<=duration;d++){if(sourceTime+d<=duration&&!occupied.has(sourceTime+d))return sourceTime+d;if(sourceTime-d>=0&&!occupied.has(sourceTime-d))return sourceTime-d;}return null;}
-function duplicateSelectedKeyframe(){const track=selectedTrack(),source=selectedTrackKey();if(!track||!source){animStatus.textContent='複製するキーを選択';return;}const t=findDuplicateTime(track,Math.round(source.time));if(t==null){animStatus.textContent='空き時刻がありません';return;}pushHistory();const copy={...source,id:`key-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:t};track.keys.push(copy);track.keys.sort((a,b)=>a.time-b.time);selectTrackKey(track.partId,copy);markChanged(`${track.name} キー複製 ${source.time}→${t}ms`);}
-function deleteCurrentKeyframe(){const track=selectedTrack(),key=selectedTrackKey();if(!track||!key){animStatus.textContent='削除するキーを選択';return;}pushHistory();track.keys=track.keys.filter(k=>k.id!==key.id);state.animation.selectedKeyId=null;state.animation.selectedTrackId=null;state.animation.keyDraftTime=null;state.animation.keyDirty=false;syncAnimationUi();applyAnimationPreview(state.animation.currentTime);markChanged('トラックキー削除');}
+function findDuplicateGroupTime(groupId,sourceTime){const occupied=new Set(groupKeyTimes(groupId)),duration=Math.round(state.animation.duration);for(const c of [sourceTime+100,sourceTime-100]){const t=Math.round(clamp(c,0,duration));if(!occupied.has(t))return t;}for(let d=1;d<=duration;d++){if(sourceTime+d<=duration&&!occupied.has(sourceTime+d))return sourceTime+d;if(sourceTime-d>=0&&!occupied.has(sourceTime-d))return sourceTime-d;}return null;}
+function duplicateSelectedKeyframe(){
+  if(!hasSelectedGroupKey()){animStatus.textContent='複製するグループキーを選択';return;}
+  const groupId=state.animation.selectedGroupId, source=Math.round(state.animation.selectedKeyTime), t=findDuplicateGroupTime(groupId,source);if(t==null){animStatus.textContent='空き時刻がありません';return;}
+  const pose=interpolatedPoseAt(source);pushHistory();partsInGroup(groupId).forEach(part=>{const pp=pose?.parts.get(part.id)||capturePartPose(part);writePartKey(part,t,{x:pp.x,y:pp.y,width:pp.width,rotation:pp.rotation},{replace:false});});selectGroupKey(groupId,t);markChanged(`${groupById(groupId)?.name||'グループ'} キー複製 ${source}→${t}ms`);
+}
+function deleteCurrentKeyframe(){
+  if(!hasSelectedGroupKey()){animStatus.textContent='削除するグループキーを選択';return;}
+  const groupId=state.animation.selectedGroupId,t=Math.round(state.animation.selectedKeyTime);pushHistory();partsInGroup(groupId).forEach(part=>{const track=trackForPart(part);if(track)track.keys=track.keys.filter(k=>Math.abs(k.time-t)>1);});clearKeySelection(false);syncAnimationUi();applyAnimationPreview(state.animation.currentTime);markChanged('グループキー削除');
+}
 function syncTimelineReadout(){const t=Math.round(state.animation.currentTime);inputs.animTime.value=t;timelineSlider.max=String(Math.max(1,state.animation.duration));timelineSlider.value=String(clamp(t,0,state.animation.duration));if(timelineEndLabel)timelineEndLabel.textContent=`${Math.round(state.animation.duration)}ms`;}
-function partDepth(part){let d=0,p=part;while(p?.parentId&&d<30){d++;p=partById(p.parentId);}return d;}
-function visibleTrackParts(){
-  if(state.animation.trackViewMode==='all')return [...state.parts].sort((a,b)=>a.order-b.order);
-  const selected=selectedPart();if(!selected)return state.parts.slice(0,4);
-  const ids=new Set([selected.id]);let p=selected;while(p?.parentId){ids.add(p.parentId);p=partById(p.parentId);}descendantsOf(selected.id).forEach(x=>ids.add(x.id));
-  return state.parts.filter(p=>ids.has(p.id)).sort((a,b)=>partDepth(a)-partDepth(b)||a.order-b.order);
-}
 function renderTrackList(){
-  if(!trackList)return;trackList.innerHTML='';const parts=visibleTrackParts(),duration=Math.max(1,state.animation.duration);
-  if(!parts.length){trackList.innerHTML='<div class="track-empty">パーツを読み込むとトラックが表示されます</div>';return;}
-  parts.forEach(part=>{
-    const track=ensureTrack(part);const row=document.createElement('div');row.className=`track-row${part.id===state.selectedId?' selected-part':''}`;
-    const label=document.createElement('button');label.type='button';label.className='track-label';label.style.paddingLeft=`${8+Math.min(3,partDepth(part))*9}px`;label.textContent=part.name;label.title=part.name;label.addEventListener('click',()=>selectPart(part.id));
-    const lane=document.createElement('div');lane.className='track-lane';
-    const playhead=document.createElement('span');playhead.className='track-playhead';playhead.style.left=`${clamp(state.animation.currentTime/duration,0,1)*100}%`;lane.appendChild(playhead);
-    sortedTrackKeys(track).forEach(key=>{
-      const selected=state.animation.selectedTrackId===part.id&&state.animation.selectedKeyId===key.id;const displayTime=selected?selectedKeyDisplayTime(key):key.time;
-      const marker=document.createElement('button');marker.type='button';marker.className=`track-key${selected?' selected':''}${selected&&state.animation.keyDirty?' draft':''}`;marker.style.left=`${clamp(displayTime/duration,0,1)*100}%`;marker.title=`${part.name} ${displayTime}ms`;
-      marker.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();stopAnimation(true);if(!selected)selectTrackKey(part.id,key);let dragged=false;const sx=e.clientX;marker.setPointerCapture?.(e.pointerId);const move=ev=>{if(Math.abs(ev.clientX-sx)>2)dragged=true;if(!dragged)return;const rect=lane.getBoundingClientRect();const ratio=rect.width?clamp((ev.clientX-rect.left)/rect.width,0,1):0;setSelectedKeyDraftTime(Math.round(ratio*state.animation.duration));};const up=()=>{marker.removeEventListener('pointermove',move);marker.removeEventListener('pointerup',up);marker.removeEventListener('pointercancel',up);renderTrackList();};marker.addEventListener('pointermove',move);marker.addEventListener('pointerup',up);marker.addEventListener('pointercancel',up);});
+  if(!trackList)return;ensureGroups();trackList.innerHTML='';const duration=Math.max(1,state.animation.duration);const groups=state.groups.filter(g=>partsInGroup(g.id).length);
+  if(!groups.length){trackList.innerHTML='<div class="track-empty">グループを作成してパーツを追加すると表示されます</div>';return;}
+  groups.forEach(group=>{
+    const row=document.createElement('div');row.className=`track-row${group.id===state.activeGroupId?' selected-part':''}`;
+    const label=document.createElement('button');label.type='button';label.className='track-label';label.textContent=group.name;label.title=`${group.name} (${partsInGroup(group.id).length}パーツ)`;label.addEventListener('click',()=>switchActiveGroup(group.id));
+    const lane=document.createElement('div');lane.className='track-lane';const playhead=document.createElement('span');playhead.className='track-playhead';playhead.style.left=`${clamp(state.animation.currentTime/duration,0,1)*100}%`;lane.appendChild(playhead);
+    groupKeyTimes(group.id).forEach(time=>{
+      const selected=state.animation.selectedGroupId===group.id&&Math.abs(state.animation.selectedKeyTime-time)<=1;const displayTime=selected&&state.animation.keyDraftTime!=null?state.animation.keyDraftTime:time;
+      const marker=document.createElement('button');marker.type='button';marker.className=`track-key${selected?' selected':''}${selected&&state.animation.keyDirty?' draft':''}`;marker.style.left=`${clamp(displayTime/duration,0,1)*100}%`;marker.title=`${group.name} ${Math.round(displayTime)}ms`;
+      marker.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();stopAnimation(true);if(!selected)selectGroupKey(group.id,time);let dragged=false;const sx=e.clientX;marker.setPointerCapture?.(e.pointerId);const move=ev=>{if(Math.abs(ev.clientX-sx)>2)dragged=true;if(!dragged)return;const rect=lane.getBoundingClientRect();const ratio=rect.width?clamp((ev.clientX-rect.left)/rect.width,0,1):0;setSelectedKeyDraftTime(Math.round(ratio*state.animation.duration));};const up=()=>{marker.removeEventListener('pointermove',move);marker.removeEventListener('pointerup',up);marker.removeEventListener('pointercancel',up);renderTrackList();};marker.addEventListener('pointermove',move);marker.addEventListener('pointerup',up);marker.addEventListener('pointercancel',up);});
       lane.appendChild(marker);
     });
     row.append(label,lane);trackList.appendChild(row);
   });
 }
-function syncAnimationUi(){motionName.value=state.animation.name;inputs.animDuration.value=Math.round(state.animation.duration);animLoop.checked=!!state.animation.loop;trackViewMode.value=state.animation.trackViewMode||'focus';syncTimelineReadout();animStatus.textContent=`${totalTrackKeyCount()} key / ${Object.values(state.animation.tracks).filter(t=>t.keys?.length).length} track`;syncKeyEditUi();renderTrackList();timelineBody.hidden=!!state.animation.timelineCollapsed;timelineCollapseBtn.textContent=state.animation.timelineCollapsed?'+':'−';trackViewport.hidden=!!state.animation.tracksHidden;trackRowsToggleBtn.textContent=state.animation.tracksHidden?'トラックを表示':'トラックを隠す';}
+function totalGroupKeyCount(){return state.groups.reduce((n,g)=>n+groupKeyTimes(g.id).length,0);}
+function syncAnimationUi(){motionName.value=state.animation.name;inputs.animDuration.value=Math.round(state.animation.duration);animLoop.checked=!!state.animation.loop;syncTimelineReadout();animStatus.textContent=`${totalGroupKeyCount()} group key / ${state.groups.filter(g=>groupKeyTimes(g.id).length).length} group`;syncKeyEditUi();renderTrackList();timelineBody.hidden=!!state.animation.timelineCollapsed;timelineCollapseBtn.textContent=state.animation.timelineCollapsed?'+':'−';trackViewport.hidden=!!state.animation.tracksHidden;trackRowsToggleBtn.textContent=state.animation.tracksHidden?'トラックを表示':'トラックを隠す';}
 function setAnimationTime(time,preview=true){stopAnimation(true);const t=clamp(num(time,0),0,state.animation.duration);if(preview)applyAnimationPreview(t,{renderTracks:true});else{state.animation.currentTime=t;syncTimelineReadout();renderTrackList();}}
 function jumpKey(direction){
-  let track=selectedTrack()||trackForPart(selectedPart());let items=track?sortedTrackKeys(track).map(k=>({partId:track.partId,key:k})):[];
-  if(!items.length)Object.values(state.animation.tracks).forEach(t=>(t.keys||[]).forEach(k=>items.push({partId:t.partId,key:k})));items.sort((a,b)=>a.key.time-b.key.time);
-  if(!items.length)return;const t=state.animation.currentTime;let target;if(direction<0)target=[...items].reverse().find(x=>x.key.time<t-1)||items[0];else target=items.find(x=>x.key.time>t+1)||items[items.length-1];selectTrackKey(target.partId,target.key);
+  let groupId=state.animation.selectedGroupId||state.activeGroupId;let items=groupKeyTimes(groupId).map(time=>({groupId,time}));
+  if(!items.length)state.groups.forEach(g=>groupKeyTimes(g.id).forEach(time=>items.push({groupId:g.id,time})));items.sort((a,b)=>a.time-b.time);if(!items.length)return;
+  const t=state.animation.currentTime;let target;if(direction<0)target=[...items].reverse().find(x=>x.time<t-1)||items[0];else target=items.find(x=>x.time>t+1)||items[items.length-1];selectGroupKey(target.groupId,target.time);
 }
 function startAnimation(){stopTest();disableIkMode(true);if(totalTrackKeyCount()<2){animStatus.textContent='キーを2つ以上登録';return;}stopAnimation(true);let startTime=state.animation.currentTime;if(startTime>=state.animation.duration-1)startTime=0;state.animation.playing=true;state.animation.playStartedAt=performance.now();state.animation.playStartTime=startTime;document.body.classList.add('animation-playing');$('#playAnimBtn').classList.add('active');animStatus.textContent='再生中';const frame=now=>{if(!state.animation.playing)return;const elapsed=now-state.animation.playStartedAt;let t=state.animation.playStartTime+elapsed;if(state.animation.loop)t=t%Math.max(1,state.animation.duration);else if(t>=state.animation.duration){t=state.animation.duration;applyAnimationPreview(t);stopAnimation(true);renderTrackList();return;}applyAnimationPreview(t);renderTrackList();state.animation.raf=requestAnimationFrame(frame);};state.animation.raf=requestAnimationFrame(frame);}
-function stopAnimation(keepPreview=true){if(state.animation.raf)cancelAnimationFrame(state.animation.raf);state.animation.raf=0;const was=state.animation.playing;state.animation.playing=false;document.body.classList.remove('animation-playing');$('#playAnimBtn')?.classList.remove('active');if(!keepPreview)clearAnimationPreview();if(was){animStatus.textContent=`${totalTrackKeyCount()} key`;renderTrackList();}}
-function applyAnimationSnapshot(saved){const fresh=freshAnimation();const tracks={};Object.entries(saved?.tracks||{}).forEach(([id,t])=>tracks[id]=cloneTrack(t));state.animation={...fresh,name:saved?.name||fresh.name,duration:Math.max(100,num(saved?.duration,fresh.duration)),loop:saved?.loop!==false,currentTime:clamp(num(saved?.currentTime,0),0,Math.max(100,num(saved?.duration,fresh.duration))),tracks,areaKeys:Array.isArray(saved?.areaKeys)?saved.areaKeys.map(cloneAreaKey):[],selectedTrackId:saved?.selectedTrackId||null,selectedKeyId:saved?.selectedKeyId||null,keyDraftTime:saved?.keyDraftTime??null,keyDirty:!!saved?.keyDirty,trackViewMode:saved?.trackViewMode||'focus',timelineCollapsed:!!saved?.timelineCollapsed,tracksHidden:!!saved?.tracksHidden};}
+function stopAnimation(keepPreview=true){if(state.animation.raf)cancelAnimationFrame(state.animation.raf);state.animation.raf=0;const was=state.animation.playing;state.animation.playing=false;document.body.classList.remove('animation-playing');$('#playAnimBtn')?.classList.remove('active');if(!keepPreview)clearAnimationPreview();if(was){animStatus.textContent=`${totalGroupKeyCount()} group key`;renderTrackList();}}
+function applyAnimationSnapshot(saved){const fresh=freshAnimation();const tracks={};Object.entries(saved?.tracks||{}).forEach(([id,t])=>tracks[id]=cloneTrack(t));state.animation={...fresh,name:saved?.name||fresh.name,duration:Math.max(100,num(saved?.duration,fresh.duration)),loop:saved?.loop!==false,currentTime:clamp(num(saved?.currentTime,0),0,Math.max(100,num(saved?.duration,fresh.duration))),tracks,areaKeys:Array.isArray(saved?.areaKeys)?saved.areaKeys.map(cloneAreaKey):[],selectedGroupId:saved?.selectedGroupId||null,selectedKeyTime:saved?.selectedKeyTime??null,keyDraftTime:saved?.keyDraftTime??null,keyDirty:!!saved?.keyDirty,timelineCollapsed:!!saved?.timelineCollapsed,tracksHidden:!!saved?.tracksHidden};}
 
 motionName.addEventListener('change',()=>{state.animation.name=motionName.value.trim()||'motion';markChanged('モーション名変更');});
 animLoop.addEventListener('change',()=>{state.animation.loop=animLoop.checked;markChanged('ループ設定変更');});
 timelineSlider.addEventListener('input',()=>{stopAnimation(true);clearKeySelection();applyAnimationPreview(num(timelineSlider.value,0),{renderTracks:true});});
 $('#addKeyBtn').addEventListener('click',addNewKeyframe);overwriteKeyBtn.addEventListener('click',overwriteSelectedKeyframe);duplicateKeyBtn.addEventListener('click',duplicateSelectedKeyframe);deleteKeyBtn.addEventListener('click',deleteCurrentKeyframe);$('#prevKeyBtn').addEventListener('click',()=>jumpKey(-1));$('#nextKeyBtn').addEventListener('click',()=>jumpKey(1));$('#playAnimBtn').addEventListener('click',startAnimation);$('#stopAnimBtn').addEventListener('click',()=>stopAnimation(true));
-trackViewMode.addEventListener('change',()=>{state.animation.trackViewMode=trackViewMode.value;renderTrackList();});
 timelineCollapseBtn.addEventListener('click',e=>{e.stopPropagation();state.animation.timelineCollapsed=!state.animation.timelineCollapsed;syncAnimationUi();});
 trackRowsToggleBtn.addEventListener('click',()=>{state.animation.tracksHidden=!state.animation.tracksHidden;syncAnimationUi();});
+
+partGroupSelect.addEventListener('change',()=>switchActiveGroup(partGroupSelect.value));
+layerGroupSelect.addEventListener('change',()=>switchActiveGroup(layerGroupSelect.value));
+newGroupBtn.addEventListener('click',createGroupFromUi);
+layerNewGroupBtn.addEventListener('click',createGroupFromUi);
 
 // ---------- history ----------
 function snapshot() {
@@ -417,6 +414,8 @@ function snapshot() {
     stage: { ...state.stage },
     area: { ...state.area },
     parts: state.parts.map(p => ({ ...p })),
+    groups: state.groups.map(g => ({ ...g })),
+    activeGroupId: state.activeGroupId,
     selectedId: state.selectedId,
     animation: animationForSnapshot()
   };
@@ -427,6 +426,10 @@ function restoreSnapshot(snap) {
   state.stage = { ...snap.stage };
   state.area = { ...snap.area };
   state.parts = snap.parts.map(p => ({ ...p }));
+  state.groups = (snap.groups || [{id:'group-default',name:'未分類'}]).map(g=>({...g}));
+  state.activeGroupId = snap.activeGroupId || state.groups[0]?.id || 'group-default';
+  ensureGroups();
+  refreshGroupSelects();
   applyAnimationSnapshot(snap.animation || freshAnimation());
   state.selectedId = snap.selectedId && state.parts.some(p => p.id === snap.selectedId) ? snap.selectedId : (state.parts.at(-1)?.id || null);
   syncStage();
@@ -512,6 +515,7 @@ function renderParts() {
     cross.addEventListener('pointerdown', onPivotPointerDown);
   });
   applyAllPartStyles();
+  ensureGroups(); refreshGroupSelects();
   renderLayers();
   renderHierarchy();
   refreshParentSelect();
@@ -524,28 +528,14 @@ function renderParts() {
 
 // ---------- flat layer panel ----------
 function renderLayers() {
-  layerList.innerHTML = '';
-  if (!state.parts.length) {
-    layerList.innerHTML = '<div class="layer-empty">パーツ未読込</div>';
-    return;
-  }
-  [...state.parts].sort((a,b) => b.order - a.order).forEach(part => {
+  ensureGroups(); refreshGroupSelects(); layerList.innerHTML = '';
+  const members = partsInGroup(state.activeGroupId);
+  if (!members.length) { layerList.innerHTML = '<div class="layer-empty">このグループにはパーツがありません</div>'; return; }
+  [...members].sort((a,b) => b.order - a.order).forEach(part => {
     const row = document.createElement('div');
-    row.className = `layer-row${part.id === state.selectedId ? ' selected' : ''}`;
-    row.dataset.id = part.id;
-    row.innerHTML = `
-      <button class="layer-eye" type="button" title="表示/非表示">${part.visible ? '👁' : '—'}</button>
-      <button class="layer-name" type="button" title="${escapeHtml(part.name)}">${escapeHtml(part.name)}</button>
-      <button class="layer-move layer-up" type="button" title="手前へ">↑</button>
-      <button class="layer-move layer-down" type="button" title="奥へ">↓</button>
-    `;
-    $('.layer-eye', row).addEventListener('click', e => {
-      e.stopPropagation(); pushHistory();
-      part.visible = !part.visible;
-      applyPartStyle(part);
-      renderLayers();
-      markChanged(part.visible ? 'レイヤー表示' : 'レイヤー非表示');
-    });
+    row.className = `layer-row${part.id === state.selectedId ? ' selected' : ''}`; row.dataset.id = part.id;
+    row.innerHTML = `<button class="layer-eye" type="button" title="表示/非表示">${part.visible ? '👁' : '—'}</button><button class="layer-name" type="button" title="${escapeHtml(part.name)}">${escapeHtml(part.name)}</button><button class="layer-move layer-up" type="button" title="手前へ">↑</button><button class="layer-move layer-down" type="button" title="奥へ">↓</button>`;
+    $('.layer-eye', row).addEventListener('click', e => { e.stopPropagation(); pushHistory(); part.visible=!part.visible; applyPartStyle(part); renderLayers(); markChanged(part.visible?'レイヤー表示':'レイヤー非表示'); });
     $('.layer-name', row).addEventListener('click', () => selectPart(part.id));
     $('.layer-up', row).addEventListener('click', e => { e.stopPropagation(); moveLayer(part.id, 1); });
     $('.layer-down', row).addEventListener('click', e => { e.stopPropagation(); moveLayer(part.id, -1); });
@@ -553,15 +543,8 @@ function renderLayers() {
   });
 }
 function moveLayer(id, direction) {
-  const ordered = [...state.parts].sort((a,b) => a.order - b.order);
-  const i = ordered.findIndex(p => p.id === id), j = i + direction;
-  if (i < 0 || j < 0 || j >= ordered.length) return;
-  pushHistory();
-  const a = ordered[i], b = ordered[j];
-  [a.order, b.order] = [b.order, a.order];
-  normalizeOrders();
-  applyAllPartStyles(); renderLayers();
-  markChanged(direction > 0 ? 'レイヤーを手前へ' : 'レイヤーを奥へ');
+  const part=partById(id); if(!part)return; const ordered=partsInGroup(part.groupId).sort((a,b)=>a.order-b.order); const i=ordered.findIndex(p=>p.id===id),j=i+direction; if(i<0||j<0||j>=ordered.length)return;
+  pushHistory(); const a=ordered[i],b=ordered[j]; [a.order,b.order]=[b.order,a.order]; applyAllPartStyles(); renderLayers(); markChanged(direction>0?'グループ内で手前へ':'グループ内で奥へ');
 }
 function normalizeOrders() {
   [...state.parts].sort((a,b) => a.order - b.order).forEach((p,i) => p.order = i + 1);
@@ -653,6 +636,7 @@ function syncInspector() {
   document.body.classList.toggle('ik-mode', state.ikMode);
   $$('.rotate-btn', controlPanel).forEach(b => b.disabled = disabled || locked || state.ikMode);
   $$('.nudge-btn', controlPanel).forEach(b => b.disabled = disabled || state.testRunning);
+  if (controlFlipIkBtn) controlFlipIkBtn.disabled = !state.ikMode || state.testRunning;
   controlModeText.textContent = state.ikMode ? 'IKターゲットをドラッグ / 末端パーツを掴んでIK' : (state.pivotMode ? 'ピボット移動 1px / 十字を直接ドラッグ可' : 'パーツ移動 1px / 回転 1°');
 
   if (!part) {
@@ -673,11 +657,9 @@ function syncInspector() {
 }
 function selectPart(id) {
   if (!id || !partById(id)) return;
-  stopTest();
-  if (state.animation.selectedKeyId && state.animation.selectedTrackId !== id) {
-    state.animation.selectedTrackId = null; state.animation.selectedKeyId = null; state.animation.keyDraftTime = null; state.animation.keyDirty = false;
-  }
-  state.selectedId = id;
+  stopTest(); const part=partById(id);
+  if (hasSelectedGroupKey() && state.animation.selectedGroupId !== part.groupId) clearKeySelection(false);
+  state.selectedId = id; state.activeGroupId = part.groupId || state.activeGroupId; refreshGroupSelects();
   if (state.ikMode && !currentIkChain()) state.ikMode = false;
   renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi(); syncKeyEditUi(); renderTrackList();
 }
@@ -837,6 +819,7 @@ $('#flipIkBtn').addEventListener('click', () => {
     markChanged('IKの曲げ向きを反転');
   }
 });
+controlFlipIkBtn.addEventListener('click', () => $('#flipIkBtn').click());
 $('#centerIkBtn').addEventListener('click', () => {
   if (!currentIkChain()) return;
   if (!state.ikMode) enableIkMode();
@@ -1063,11 +1046,13 @@ partInput.addEventListener('change', async () => {
       pivotY: Math.round(natural.height / 2),
       parentId: '',
       visible: true,
-      order: state.parts.length + 1
+      order: state.parts.length + 1,
+      groupId: partGroupSelect.value || state.activeGroupId || state.groups[0]?.id
     };
     state.parts.push(part);
     state.selectedId = part.id;
   }
+  state.activeGroupId = partGroupSelect.value || state.activeGroupId;
   partInput.value = '';
   renderParts();
   markChanged(`${files.length}パーツ追加（実寸）`);
@@ -1112,7 +1097,7 @@ $('#deletePartBtn').addEventListener('click', () => {
   children.forEach(child => reparentPreserveWorld(child, ''));
   state.parts = state.parts.filter(p => p.id !== part.id);
   delete state.animation.tracks[part.id];
-  if (state.animation.selectedTrackId === part.id) { state.animation.selectedTrackId = null; state.animation.selectedKeyId = null; state.animation.keyDraftTime = null; state.animation.keyDirty = false; }
+  if (hasSelectedGroupKey() && state.animation.selectedGroupId === part.groupId && !partsInGroup(part.groupId).length) clearKeySelection(false);
   normalizeOrders();
   state.selectedId = state.parts.at(-1)?.id || null;
   renderParts(); markChanged('パーツ削除');
@@ -1312,9 +1297,11 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 11,
+    version: 12,
     stage: { ...state.stage },
     characterArea: { ...state.area },
+    groups: state.groups.map(g => ({ id:g.id, name:g.name })),
+    activeGroupId: state.activeGroupId,
     parts: [...state.parts].sort((a,b) => a.order - b.order).map(p => ({
       id: p.id,
       name: p.name,
@@ -1330,14 +1317,17 @@ function exportData() {
       parentId: p.parentId,
       parentFileName: p.parentId ? (partById(p.parentId)?.fileName || '') : '',
       visible: p.visible,
-      order: p.order
+      order: p.order,
+      groupId: p.groupId,
+      groupName: groupById(p.groupId)?.name || ''
     })),
     animation: {
       name: state.animation.name,
       duration: Math.round(state.animation.duration),
       loop: state.animation.loop,
       currentTime: Math.round(state.animation.currentTime),
-      trackFormat: 1,
+      trackFormat: 2,
+      displayMode: 'groups',
       tracks: Object.values(state.animation.tracks).filter(track => track.keys?.length).map(track => ({
         fileName: track.fileName,
         name: track.name,
@@ -1485,6 +1475,11 @@ function importCoordinateData(data) {
   stopTest();
   pushHistory();
 
+  if (Array.isArray(data.groups) && data.groups.length) { state.groups = data.groups.map(g=>({id:String(g.id||makeGroupId()),name:String(g.name||'グループ')})); }
+  else ensureGroups();
+  state.activeGroupId = data.activeGroupId && state.groups.some(g=>g.id===data.activeGroupId) ? data.activeGroupId : state.groups[0].id;
+  refreshGroupSelects();
+
   const unusedIds = new Set(state.parts.map(p => p.id));
   const matches = [];
   const missing = [];
@@ -1525,6 +1520,8 @@ function importCoordinateData(data) {
     current.pivotY = num(saved.pivotY, current.pivotY);
     current.visible = saved.visible !== false;
     current.order = num(saved.order, current.order);
+    const savedGroup = (saved.groupId && state.groups.find(g=>g.id===saved.groupId)) || (saved.groupName && state.groups.find(g=>g.name===saved.groupName));
+    if (savedGroup) current.groupId = savedGroup.id;
     current.parentId = '';
   });
 
@@ -1586,7 +1583,7 @@ $('#resetBtn').addEventListener('click', () => {
   stopTest(); pushHistory();
   state.stage = { width:390, height:844 };
   state.area = { x:12, y:18, width:160, height:220 };
-  state.parts = []; state.selectedId = null; state.pivotMode = false; state.ikMode = false; state.animation = freshAnimation();
+  state.parts = []; state.groups=[{id:'group-default',name:'未分類'}]; state.activeGroupId='group-default'; state.selectedId = null; state.pivotMode = false; state.ikMode = false; state.animation = freshAnimation(); refreshGroupSelects();
   if (state.backgroundUrl) URL.revokeObjectURL(state.backgroundUrl);
   state.backgroundUrl = '';
   backgroundImage.hidden = true; backgroundImage.removeAttribute('src'); stageEmpty.hidden = false;
