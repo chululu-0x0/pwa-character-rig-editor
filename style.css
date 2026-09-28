@@ -196,3 +196,63 @@ body.ik-mode #toggleIkBtn, #toggleIkBtn.active {
   color: white;
   border-color: transparent;
 }
+
+
+/* v9: timeline / keyframe editor */
+.timeline-panel {
+  left: 270px;
+  bottom: 18px;
+  width: min(780px, calc(100vw - 300px));
+  min-width: 560px;
+  z-index: 5200;
+}
+.timeline-body { padding: 9px 11px 10px; }
+.timeline-topbar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.timeline-topbar label { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.timeline-topbar label input { margin-top: 0; }
+.motion-name-label { min-width: 190px; }
+.motion-name-label input { width: 130px; padding-block: 6px; }
+.compact-number { width: 70px !important; }
+.loop-label input { width: auto; }
+.timeline-transport { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0 7px; }
+.timeline-transport button { padding: 6px 9px; }
+.timeline-ruler { position: relative; height: 42px; padding: 7px 5px 0; }
+#timelineSlider {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 10px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  z-index: 2;
+  accent-color: var(--accent);
+  touch-action: none;
+}
+.timeline-markers { position: absolute; left: 10px; right: 10px; top: 28px; height: 14px; z-index: 3; pointer-events: none; }
+.key-marker {
+  position: absolute;
+  top: 0;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 1px solid #6e568f;
+  border-radius: 3px;
+  background: #efe5fa;
+  transform: translateX(-50%) rotate(45deg);
+  box-shadow: none;
+  pointer-events: auto;
+}
+.key-marker.active { background: var(--accent); border-color: var(--accent); }
+.timeline-help { font-size: 9px; line-height: 1.45; color: #83766e; }
+body.animation-playing .pivot-cross,
+body.animation-playing .character-area-label,
+body.animation-playing #ikTarget { display: none !important; }
+@media (max-width: 1000px) {
+  .timeline-panel { left: 14px; width: calc(100vw - 28px); min-width: 0; }
+}

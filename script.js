@@ -26,6 +26,12 @@ const redoBtn = $('#redoBtn');
 const ikTarget = $('#ikTarget');
 const toggleIkBtn = $('#toggleIkBtn');
 const ikStatus = $('#ikStatus');
+const animationPanel = $('#animationPanel');
+const timelineSlider = $('#timelineSlider');
+const timelineMarkers = $('#timelineMarkers');
+const animStatus = $('#animStatus');
+const motionName = $('#motionName');
+const animLoop = $('#animLoop');
 
 const state = {
   stage: { width: 390, height: 844 },
@@ -41,6 +47,11 @@ const state = {
   ikMode: false,
   ikBendDir: 1,
   ikTarget: { x: 0, y: 0 },
+  animation: {
+    name: 'walk01', duration: 1000, loop: true, currentTime: 0,
+    keyframes: [], playing: false, raf: 0, playStartedAt: 0, playStartTime: 0,
+    previewActive: false, previewPose: null
+  },
   liveObjectUrls: new Set(),
   undoStack: [],
   redoStack: []
@@ -53,7 +64,8 @@ const inputs = {
   pivotX: $('#pivotX'), pivotY: $('#pivotY'),
   testAmplitude: $('#testAmplitude'), testDuration: $('#testDuration'),
   testChildScale: $('#testChildScale'), testDelay: $('#testDelay'),
-  ikRootName: $('#ikRootName'), ikMidName: $('#ikMidName'), ikEndName: $('#ikEndName'), ikBendName: $('#ikBendName')
+  ikRootName: $('#ikRootName'), ikMidName: $('#ikMidName'), ikEndName: $('#ikEndName'), ikBendName: $('#ikBendName'),
+  animDuration: $('#animDuration'), animTime: $('#animTime')
 };
 
 function uid() {
@@ -76,6 +88,11 @@ function normalizeRad(rad) {
   return rad;
 }
 function dist(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
+function lerp(a,b,t) { return a + (b-a)*t; }
+function lerpAngle(a,b,t) {
+  let d = ((b - a + 540) % 360) - 180;
+  return a + d * t;
+}
 function selectedPart() { return state.parts.find(p => p.id === state.selectedId) || null; }
 function partById(id) { return state.parts.find(p => p.id === id) || null; }
 function getPartNode(id) {
@@ -148,13 +165,327 @@ function decomposeLocalMatrixIntoPart(part, m) {
   part.y = m.f - part.pivotY + rpY;
 }
 
+
+// ---------- animation / keyframes ----------
+function freshAnimation() {
+  return {
+    name: 'walk01', duration: 1000, loop: true, currentTime: 0,
+    keyframes: [], playing: false, raf: 0, playStartedAt: 0, playStartTime: 0,
+    previewActive: false, previewPose: null
+  };
+}
+function cloneKeyframe(frame) {
+  return {
+    id: frame.id,
+    time: frame.time,
+    area: { ...frame.area },
+    parts: frame.parts.map(p => ({ ...p }))
+  };
+}
+function animationForSnapshot() {
+  const a = state.animation;
+  return {
+    name: a.name,
+    duration: a.duration,
+    loop: a.loop,
+    currentTime: a.currentTime,
+    keyframes: a.keyframes.map(cloneKeyframe)
+  };
+}
+function poseFromState() {
+  return {
+    area: { x: state.area.x, y: state.area.y },
+    parts: state.parts.map(p => ({
+      id: p.id, fileName: p.fileName, name: p.name,
+      x: p.x, y: p.y, width: p.width, rotation: p.rotation
+    }))
+  };
+}
+function poseEntryForPart(frame, part) {
+  if (!frame) return null;
+  return frame.parts.find(p => p.id === part.id)
+    || frame.parts.find(p => p.fileName && p.fileName === part.fileName)
+    || frame.parts.find(p => p.name && p.name === part.name)
+    || null;
+}
+function sortedKeyframes() {
+  return [...state.animation.keyframes].sort((a,b) => a.time - b.time);
+}
+function interpolatedPoseAt(time) {
+  const frames = sortedKeyframes();
+  if (!frames.length) return null;
+  const t = clamp(time, 0, state.animation.duration);
+  let a = frames[0], b = frames[frames.length - 1];
+  if (t <= a.time) b = a;
+  else if (t >= b.time) a = b;
+  else {
+    for (let i=0;i<frames.length-1;i++) {
+      if (t >= frames[i].time && t <= frames[i+1].time) { a=frames[i]; b=frames[i+1]; break; }
+    }
+  }
+  const span = Math.max(1, b.time - a.time);
+  const f = a === b ? 0 : clamp((t - a.time) / span, 0, 1);
+  const areaA = a.area || { x:state.area.x, y:state.area.y };
+  const areaB = b.area || areaA;
+  const pose = {
+    area: { x:lerp(areaA.x, areaB.x, f), y:lerp(areaA.y, areaB.y, f) },
+    parts: new Map()
+  };
+  state.parts.forEach(part => {
+    const pa = poseEntryForPart(a, part) || { x:part.x,y:part.y,width:part.width,rotation:part.rotation };
+    const pb = poseEntryForPart(b, part) || pa;
+    pose.parts.set(part.id, {
+      x: lerp(num(pa.x, part.x), num(pb.x, pa.x), f),
+      y: lerp(num(pa.y, part.y), num(pb.y, pa.y), f),
+      width: lerp(num(pa.width, part.width), num(pb.width, pa.width), f),
+      rotation: lerpAngle(num(pa.rotation, part.rotation), num(pb.rotation, pa.rotation), f)
+    });
+  });
+  return pose;
+}
+function localMatrixFromPose(part, pose) {
+  const x = pose?.x ?? part.x;
+  const y = pose?.y ?? part.y;
+  const rotation = pose?.rotation ?? part.rotation;
+  return multiply(
+    translate(x, y),
+    multiply(translate(part.pivotX, part.pivotY), multiply(rotate(rotation), translate(-part.pivotX, -part.pivotY)))
+  );
+}
+function worldMatrixFromPose(part, poseMap, cache = new Map()) {
+  if (!part) return identity();
+  if (cache.has(part.id)) return cache.get(part.id);
+  const local = localMatrixFromPose(part, poseMap?.get(part.id));
+  const parent = part.parentId ? partById(part.parentId) : null;
+  const result = parent ? multiply(worldMatrixFromPose(parent, poseMap, cache), local) : local;
+  cache.set(part.id, result);
+  return result;
+}
+function applyPreviewPose(pose) {
+  if (!pose) return;
+  characterArea.style.left = `${pose.area.x}px`;
+  characterArea.style.top = `${pose.area.y}px`;
+  const cache = new Map();
+  state.parts.forEach(part => {
+    const node = getPartNode(part.id);
+    if (!node) return;
+    const pp = pose.parts.get(part.id);
+    const m = worldMatrixFromPose(part, pose.parts, cache);
+    node.style.width = `${pp?.width ?? part.width}px`;
+    node.style.transformOrigin = '0 0';
+    node.style.transform = `matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
+    node.style.zIndex = String(part.order || 1);
+    node.classList.toggle('hidden-layer', !part.visible);
+  });
+}
+function applyAnimationPreview(time, {renderMarkers=false} = {}) {
+  const pose = interpolatedPoseAt(time);
+  state.animation.currentTime = clamp(time, 0, state.animation.duration);
+  syncTimelineReadout(renderMarkers);
+  if (!pose) {
+    state.animation.previewActive = false;
+    state.animation.previewPose = null;
+    syncArea();
+    applyAllPartStyles();
+    return;
+  }
+  state.animation.previewActive = true;
+  state.animation.previewPose = pose;
+  applyPreviewPose(pose);
+  syncInspector();
+}
+function commitAnimationPreview() {
+  if (!state.animation.previewActive || !state.animation.previewPose) return false;
+  const pose = state.animation.previewPose;
+  state.area.x = pose.area.x;
+  state.area.y = pose.area.y;
+  state.parts.forEach(part => {
+    const pp = pose.parts.get(part.id);
+    if (!pp) return;
+    part.x = pp.x; part.y = pp.y; part.width = pp.width; part.rotation = pp.rotation;
+  });
+  state.animation.previewActive = false;
+  state.animation.previewPose = null;
+  syncArea();
+  applyAllPartStyles();
+  syncInspector();
+  return true;
+}
+function clearAnimationPreview({restore=true} = {}) {
+  state.animation.previewActive = false;
+  state.animation.previewPose = null;
+  if (restore) { syncArea(); applyAllPartStyles(); syncInspector(); }
+}
+function currentPoseForKeyframe() {
+  if (state.animation.previewActive && state.animation.previewPose) {
+    const pose = state.animation.previewPose;
+    return {
+      area: { ...pose.area },
+      parts: state.parts.map(part => {
+        const pp = pose.parts.get(part.id) || part;
+        return { id:part.id,fileName:part.fileName,name:part.name,x:pp.x,y:pp.y,width:pp.width,rotation:pp.rotation };
+      })
+    };
+  }
+  return poseFromState();
+}
+function keyAtTime(time, tolerance=1) {
+  return state.animation.keyframes.find(k => Math.abs(k.time - time) <= tolerance) || null;
+}
+function addOrUpdateKeyframe() {
+  stopAnimation(true);
+  const t = Math.round(state.animation.currentTime);
+  pushHistory();
+  const pose = currentPoseForKeyframe();
+  const existing = keyAtTime(t, 1);
+  if (existing) {
+    existing.area = { ...pose.area };
+    existing.parts = pose.parts.map(p => ({ ...p }));
+    existing.time = t;
+    markChanged(`キーフレーム更新 ${t}ms`);
+  } else {
+    state.animation.keyframes.push({ id:`key-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, time:t, area:{...pose.area}, parts:pose.parts.map(p=>({...p})) });
+    state.animation.keyframes.sort((a,b)=>a.time-b.time);
+    markChanged(`キーフレーム追加 ${t}ms`);
+  }
+  renderTimelineMarkers();
+  syncAnimationUi();
+}
+function deleteCurrentKeyframe() {
+  const key = keyAtTime(Math.round(state.animation.currentTime), 2);
+  if (!key) { animStatus.textContent = 'この時刻にキーなし'; return; }
+  pushHistory();
+  state.animation.keyframes = state.animation.keyframes.filter(k => k.id !== key.id);
+  renderTimelineMarkers();
+  syncAnimationUi();
+  if (state.animation.keyframes.length) applyAnimationPreview(state.animation.currentTime, {renderMarkers:true});
+  else clearAnimationPreview();
+  markChanged('キーフレーム削除');
+}
+function syncTimelineReadout(renderMarkers=false) {
+  const t = Math.round(state.animation.currentTime);
+  inputs.animTime.value = t;
+  timelineSlider.max = String(Math.max(1, state.animation.duration));
+  timelineSlider.value = String(clamp(t, 0, state.animation.duration));
+  if (renderMarkers) renderTimelineMarkers();
+}
+function syncAnimationUi() {
+  motionName.value = state.animation.name;
+  inputs.animDuration.value = Math.round(state.animation.duration);
+  animLoop.checked = !!state.animation.loop;
+  syncTimelineReadout(false);
+  animStatus.textContent = `${state.animation.keyframes.length} key`;
+  renderTimelineMarkers();
+}
+function renderTimelineMarkers() {
+  timelineMarkers.innerHTML = '';
+  const duration = Math.max(1, state.animation.duration);
+  const current = Math.round(state.animation.currentTime);
+  sortedKeyframes().forEach(frame => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `key-marker${Math.abs(frame.time-current)<=1 ? ' active' : ''}`;
+    b.style.left = `${clamp(frame.time/duration,0,1)*100}%`;
+    b.title = `${frame.time}ms`;
+    b.setAttribute('aria-label', `${frame.time}ミリ秒のキーフレーム`);
+    b.addEventListener('click', e => {
+      e.stopPropagation();
+      stopAnimation(true);
+      applyAnimationPreview(frame.time, {renderMarkers:true});
+    });
+    timelineMarkers.appendChild(b);
+  });
+}
+function setAnimationTime(time, preview=true) {
+  stopAnimation(true);
+  const t = clamp(num(time,0), 0, state.animation.duration);
+  if (preview) applyAnimationPreview(t, {renderMarkers:true});
+  else { state.animation.currentTime=t; syncTimelineReadout(true); }
+}
+function jumpKey(direction) {
+  const frames = sortedKeyframes();
+  if (!frames.length) return;
+  const t = state.animation.currentTime;
+  let target;
+  if (direction < 0) target = [...frames].reverse().find(k => k.time < t - 1) || frames[0];
+  else target = frames.find(k => k.time > t + 1) || frames[frames.length-1];
+  applyAnimationPreview(target.time, {renderMarkers:true});
+}
+function startAnimation() {
+  stopTest();
+  disableIkMode(true);
+  const frames = sortedKeyframes();
+  if (frames.length < 2) { animStatus.textContent = 'キーを2つ以上登録'; return; }
+  stopAnimation(true);
+  let startTime = state.animation.currentTime;
+  if (startTime >= state.animation.duration - 1) startTime = 0;
+  state.animation.playing = true;
+  state.animation.playStartedAt = performance.now();
+  state.animation.playStartTime = startTime;
+  document.body.classList.add('animation-playing');
+  $('#playAnimBtn').classList.add('active');
+  animStatus.textContent = '再生中';
+  const frame = now => {
+    if (!state.animation.playing) return;
+    const elapsed = now - state.animation.playStartedAt;
+    let t = state.animation.playStartTime + elapsed;
+    if (state.animation.loop) t = t % Math.max(1, state.animation.duration);
+    else if (t >= state.animation.duration) {
+      t = state.animation.duration;
+      applyAnimationPreview(t, {renderMarkers:false});
+      stopAnimation(true);
+      renderTimelineMarkers();
+      return;
+    }
+    applyAnimationPreview(t, {renderMarkers:false});
+    state.animation.raf = requestAnimationFrame(frame);
+  };
+  state.animation.raf = requestAnimationFrame(frame);
+}
+function stopAnimation(keepPreview=true) {
+  if (state.animation.raf) cancelAnimationFrame(state.animation.raf);
+  state.animation.raf = 0;
+  const wasPlaying = state.animation.playing;
+  state.animation.playing = false;
+  document.body.classList.remove('animation-playing');
+  $('#playAnimBtn')?.classList.remove('active');
+  if (!keepPreview) clearAnimationPreview();
+  if (wasPlaying) {
+    animStatus.textContent = `${state.animation.keyframes.length} key`;
+    renderTimelineMarkers();
+  }
+}
+function applyAnimationSnapshot(saved) {
+  const fresh = freshAnimation();
+  state.animation = {
+    ...fresh,
+    name: saved?.name || fresh.name,
+    duration: Math.max(100, num(saved?.duration, fresh.duration)),
+    loop: saved?.loop !== false,
+    currentTime: clamp(num(saved?.currentTime,0),0,Math.max(100,num(saved?.duration,fresh.duration))),
+    keyframes: Array.isArray(saved?.keyframes) ? saved.keyframes.map(cloneKeyframe) : []
+  };
+}
+
+motionName.addEventListener('change', () => { state.animation.name = motionName.value.trim() || 'motion'; markChanged('モーション名変更'); });
+animLoop.addEventListener('change', () => { state.animation.loop = animLoop.checked; markChanged('ループ設定変更'); });
+timelineSlider.addEventListener('input', () => { stopAnimation(true); applyAnimationPreview(num(timelineSlider.value,0), {renderMarkers:false}); });
+timelineSlider.addEventListener('change', () => renderTimelineMarkers());
+$('#addKeyBtn').addEventListener('click', addOrUpdateKeyframe);
+$('#deleteKeyBtn').addEventListener('click', deleteCurrentKeyframe);
+$('#prevKeyBtn').addEventListener('click', () => jumpKey(-1));
+$('#nextKeyBtn').addEventListener('click', () => jumpKey(1));
+$('#playAnimBtn').addEventListener('click', startAnimation);
+$('#stopAnimBtn').addEventListener('click', () => stopAnimation(true));
+
 // ---------- history ----------
 function snapshot() {
   return {
     stage: { ...state.stage },
     area: { ...state.area },
     parts: state.parts.map(p => ({ ...p })),
-    selectedId: state.selectedId
+    selectedId: state.selectedId,
+    animation: animationForSnapshot()
   };
 }
 function restoreSnapshot(snap) {
@@ -163,10 +494,12 @@ function restoreSnapshot(snap) {
   state.stage = { ...snap.stage };
   state.area = { ...snap.area };
   state.parts = snap.parts.map(p => ({ ...p }));
+  applyAnimationSnapshot(snap.animation || freshAnimation());
   state.selectedId = snap.selectedId && state.parts.some(p => p.id === snap.selectedId) ? snap.selectedId : (state.parts.at(-1)?.id || null);
   syncStage();
   syncArea();
   renderParts();
+  syncAnimationUi();
   updateHistoryButtons();
 }
 function pushHistory() {
@@ -231,6 +564,7 @@ function applyAllPartStyles(offsets = null) {
 }
 function renderParts() {
   stopTest();
+  stopAnimation(false);
   $$('.rig-part', characterArea).forEach(el => el.remove());
   [...state.parts].sort((a,b) => a.order - b.order).forEach(part => {
     const node = partTemplate.content.firstElementChild.cloneNode(true);
@@ -251,6 +585,7 @@ function renderParts() {
   syncInspector();
   refreshIkUi();
   updateIkTargetVisual();
+  syncAnimationUi();
 }
 
 
@@ -365,6 +700,7 @@ parentSelect.addEventListener('change', () => {
   if (!part || state.pivotMode || state.testRunning) return;
   const newParentId = parentSelect.value;
   if (newParentId === part.parentId) return;
+  commitAnimationPreview();
   pushHistory();
   reparentPreserveWorld(part, newParentId);
   applyAllPartStyles(); renderHierarchy(); refreshParentSelect(); syncInspector();
@@ -391,14 +727,15 @@ function syncInspector() {
     selectedName.textContent = 'レイヤー / 親子ツリーから選択';
     return;
   }
-  inputs.partX.value = Math.round(part.x);
-  inputs.partY.value = Math.round(part.y);
-  inputs.partW.value = Math.round(part.width);
-  inputs.partRot.value = Math.round(part.rotation);
+  const previewPart = state.animation.previewActive ? state.animation.previewPose?.parts?.get(part.id) : null;
+  inputs.partX.value = Math.round(previewPart?.x ?? part.x);
+  inputs.partY.value = Math.round(previewPart?.y ?? part.y);
+  inputs.partW.value = Math.round(previewPart?.width ?? part.width);
+  inputs.partRot.value = Math.round(previewPart?.rotation ?? part.rotation);
   inputs.pivotX.value = Math.round(part.pivotX);
   inputs.pivotY.value = Math.round(part.pivotY);
   parentSelect.value = part.parentId || '';
-  selectedCoord.textContent = `X ${Math.round(part.x)} / Y ${Math.round(part.y)}`;
+  selectedCoord.textContent = `X ${Math.round(previewPart?.x ?? part.x)} / Y ${Math.round(previewPart?.y ?? part.y)}`;
   selectedName.textContent = part.name;
 }
 function selectPart(id) {
@@ -460,6 +797,8 @@ function disableIkMode(silent = false) {
 }
 function enableIkMode() {
   stopTest();
+  stopAnimation(true);
+  commitAnimationPreview();
   const chain = currentIkChain();
   if (!chain) {
     state.ikMode = false;
@@ -591,6 +930,7 @@ function onPartClick(event) {
   if (state.pivotMode && !event.target.classList.contains('pivot-cross')) {
     const p = pointerToArea(event.clientX, event.clientY);
     const part = selectedPart();
+    commitAnimationPreview();
     const localPoint = transformPoint(inverse(worldMatrix(part)), p.x, p.y);
     pushHistory();
     setPivotPreservePose(part, localPoint.x, localPoint.y);
@@ -616,6 +956,8 @@ function onPartPointerDown(event) {
   event.preventDefault();
   const part = selectedPart();
   if (!part) return;
+  stopAnimation(true);
+  commitAnimationPreview();
   pushHistory();
   const sx = event.clientX, sy = event.clientY;
   const ox = part.x, oy = part.y;
@@ -665,6 +1007,8 @@ function onPivotPointerDown(event) {
   const part = partById(node?.dataset.id);
   if (!part) return;
   selectPart(part.id);
+  stopAnimation(true);
+  commitAnimationPreview();
   pushHistory();
   event.currentTarget.setPointerCapture?.(event.pointerId);
   const movePivot = e => {
@@ -689,6 +1033,8 @@ function onPivotPointerDown(event) {
 function nudgeSelected(dx, dy) {
   const part = selectedPart();
   if (!part || state.testRunning) return;
+  stopAnimation(true);
+  commitAnimationPreview();
   pushHistory();
   if (state.pivotMode) {
     setPivotPreservePose(part, part.pivotX + dx, part.pivotY + dy);
@@ -700,6 +1046,8 @@ function nudgeSelected(dx, dy) {
 function rotateSelected(delta) {
   const part = selectedPart();
   if (!part || state.pivotMode || state.testRunning) return;
+  stopAnimation(true);
+  commitAnimationPreview();
   pushHistory();
   part.rotation += delta;
   applyAllPartStyles(); syncInspector(); markChanged(`${delta > 0 ? '+' : ''}${delta}°回転`);
@@ -711,7 +1059,7 @@ $$('.rotate-btn', controlPanel).forEach(button => button.addEventListener('click
 characterArea.addEventListener('pointerdown', event => {
   if (event.target !== characterArea && !event.target.classList.contains('character-area-label')) return;
   if (state.pivotMode || state.testRunning) return;
-  event.preventDefault(); pushHistory();
+  event.preventDefault(); stopAnimation(true); commitAnimationPreview(); pushHistory();
   const sx = event.clientX, sy = event.clientY;
   const ox = state.area.x, oy = state.area.y;
   characterArea.setPointerCapture?.(event.pointerId);
@@ -789,6 +1137,8 @@ function getImageSize(url) {
 // ---------- pivot mode ----------
 $('#togglePivotBtn').addEventListener('click', event => {
   stopTest();
+  stopAnimation(true);
+  if (!state.pivotMode) commitAnimationPreview();
   if (!state.pivotMode && state.ikMode) disableIkMode(true);
   state.pivotMode = !state.pivotMode;
   event.currentTarget.classList.toggle('active', state.pivotMode);
@@ -809,11 +1159,12 @@ $('#applyStageSizeBtn').addEventListener('click', () => {
 $('#deletePartBtn').addEventListener('click', () => {
   const part = selectedPart();
   if (!part) return;
-  stopTest(); pushHistory();
+  stopTest(); stopAnimation(true); commitAnimationPreview(); pushHistory();
   // Children keep their current world pose when detached to root.
   const children = state.parts.filter(p => p.parentId === part.id);
   children.forEach(child => reparentPreserveWorld(child, ''));
   state.parts = state.parts.filter(p => p.id !== part.id);
+  state.animation.keyframes.forEach(frame => frame.parts = frame.parts.filter(fp => fp.id !== part.id && fp.fileName !== part.fileName));
   normalizeOrders();
   state.selectedId = state.parts.at(-1)?.id || null;
   renderParts(); markChanged('パーツ削除');
@@ -865,10 +1216,22 @@ numpadBackdrop.addEventListener('pointerdown', e => { if (e.target === numpadBac
 function applyNumericInput(id) {
   const v = int(inputs[id]?.value, 0);
   if (['testAmplitude','testDuration','testChildScale','testDelay'].includes(id)) return;
+  if (id === 'animTime') { setAnimationTime(v, true); return; }
+  if (id === 'animDuration') {
+    stopAnimation(true); pushHistory();
+    state.animation.duration = Math.max(100, Math.abs(v));
+    state.animation.currentTime = clamp(state.animation.currentTime,0,state.animation.duration);
+    state.animation.keyframes.forEach(k => k.time = clamp(k.time,0,state.animation.duration));
+    const dedup = new Map(); state.animation.keyframes.sort((a,b)=>a.time-b.time).forEach(k=>dedup.set(k.time,k));
+    state.animation.keyframes = [...dedup.values()].sort((a,b)=>a.time-b.time);
+    syncAnimationUi();
+    if (state.animation.keyframes.length) applyAnimationPreview(state.animation.currentTime,{renderMarkers:true});
+    markChanged('アニメーション長変更'); return;
+  }
   if (id === 'stageWidth' || id === 'stageHeight') return;
   if (id.startsWith('area')) {
     if (state.pivotMode || state.testRunning) return;
-    pushHistory();
+    stopAnimation(true); commitAnimationPreview(); pushHistory();
     state.area.x = id === 'areaX' ? v : state.area.x;
     state.area.y = id === 'areaY' ? v : state.area.y;
     state.area.width = id === 'areaW' ? Math.max(40, v) : state.area.width;
@@ -877,6 +1240,7 @@ function applyNumericInput(id) {
   }
   const part = selectedPart();
   if (!part || state.testRunning) return;
+  stopAnimation(true); commitAnimationPreview();
   const map = { partX:'x', partY:'y', partW:'width', partRot:'rotation', pivotX:'pivotX', pivotY:'pivotY' };
   const key = map[id];
   if (!key) return;
@@ -889,7 +1253,7 @@ function applyNumericInput(id) {
 }
 
 // ---------- draggable floating panels ----------
-[controlPanel, layerPanel, hierarchyPanel].forEach(makePanelDraggable);
+[controlPanel, layerPanel, hierarchyPanel, animationPanel].forEach(makePanelDraggable);
 function makePanelDraggable(panel) {
   const handle = $('.panel-drag-handle', panel);
   const saved = loadPanelPosition(panel.dataset.panel);
@@ -939,6 +1303,7 @@ function descendantsWithDepth(rootId) {
   return result;
 }
 function startTest() {
+  stopAnimation(false);
   disableIkMode(true);
   stopTest();
   const part = selectedPart();
@@ -991,7 +1356,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 8,
+    version: 9,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     parts: [...state.parts].sort((a,b) => a.order - b.order).map(p => ({
@@ -1010,7 +1375,22 @@ function exportData() {
       parentFileName: p.parentId ? (partById(p.parentId)?.fileName || '') : '',
       visible: p.visible,
       order: p.order
-    }))
+    })),
+    animation: {
+      name: state.animation.name,
+      duration: Math.round(state.animation.duration),
+      loop: state.animation.loop,
+      currentTime: Math.round(state.animation.currentTime),
+      keyframes: sortedKeyframes().map(frame => ({
+        id: frame.id,
+        time: Math.round(frame.time),
+        area: { x:Math.round(frame.area.x), y:Math.round(frame.area.y) },
+        parts: frame.parts.map(fp => ({
+          fileName: fp.fileName, name: fp.name,
+          x: Math.round(fp.x), y: Math.round(fp.y), width: Math.round(fp.width), rotation: Math.round(fp.rotation * 1000) / 1000
+        }))
+      }))
+    }
   };
 }
 function jsonText() { return JSON.stringify(exportData(), null, 2); }
@@ -1095,6 +1475,41 @@ function findCurrentPartForSaved(saved, unusedIds) {
   return current || null;
 }
 
+
+function importAnimationData(savedAnimation, matches) {
+  const fresh = freshAnimation();
+  if (!savedAnimation || !Array.isArray(savedAnimation.keyframes)) {
+    state.animation = fresh;
+    return;
+  }
+  const lookup = new Map();
+  matches.forEach(({saved,current}) => {
+    if (saved.fileName) lookup.set(`file:${String(saved.fileName).toLocaleLowerCase()}`, current);
+    if (saved.name) lookup.set(`name:${String(saved.name)}`, current);
+  });
+  const frames = savedAnimation.keyframes.map(frame => ({
+    id: frame.id || `key-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+    time: clamp(num(frame.time,0),0,Math.max(100,num(savedAnimation.duration,1000))),
+    area: { x:num(frame.area?.x,state.area.x), y:num(frame.area?.y,state.area.y) },
+    parts: Array.isArray(frame.parts) ? frame.parts.map(fp => {
+      const current = (fp.fileName && lookup.get(`file:${String(fp.fileName).toLocaleLowerCase()}`)) || (fp.name && lookup.get(`name:${String(fp.name)}`));
+      if (!current) return null;
+      return {
+        id: current.id, fileName: current.fileName, name: current.name,
+        x:num(fp.x,current.x), y:num(fp.y,current.y), width:Math.max(1,num(fp.width,current.width)), rotation:num(fp.rotation,current.rotation)
+      };
+    }).filter(Boolean) : []
+  })).sort((a,b)=>a.time-b.time);
+  state.animation = {
+    ...fresh,
+    name: savedAnimation.name || 'motion',
+    duration: Math.max(100,num(savedAnimation.duration,1000)),
+    loop: savedAnimation.loop !== false,
+    currentTime: clamp(num(savedAnimation.currentTime,0),0,Math.max(100,num(savedAnimation.duration,1000))),
+    keyframes: frames
+  };
+}
+
 function importCoordinateData(data) {
   if (!data || !Array.isArray(data.parts)) throw new Error('parts配列がありません');
   if (!state.parts.length) throw new Error('先にパーツ画像を読み込んでください');
@@ -1160,11 +1575,14 @@ function importCoordinateData(data) {
     if (parentId && parentId !== current.id) current.parentId = parentId;
   });
 
+  importAnimationData(data.animation, matches);
   normalizeOrders();
   if (!state.parts.some(p => p.id === state.selectedId)) state.selectedId = matches[0].current.id;
   syncStage();
   syncArea();
   renderParts();
+  syncAnimationUi();
+  if (state.animation.keyframes.length) applyAnimationPreview(state.animation.currentTime,{renderMarkers:true});
 
   const extraCount = unusedIds.size;
   const message = `座標読み込み完了 ${matches.length}/${data.parts.length}パーツ`;
@@ -1200,27 +1618,28 @@ $('#resetBtn').addEventListener('click', () => {
   stopTest(); pushHistory();
   state.stage = { width:390, height:844 };
   state.area = { x:12, y:18, width:160, height:220 };
-  state.parts = []; state.selectedId = null; state.pivotMode = false; state.ikMode = false;
+  state.parts = []; state.selectedId = null; state.pivotMode = false; state.ikMode = false; state.animation = freshAnimation();
   if (state.backgroundUrl) URL.revokeObjectURL(state.backgroundUrl);
   state.backgroundUrl = '';
   backgroundImage.hidden = true; backgroundImage.removeAttribute('src'); stageEmpty.hidden = false;
   jsonPreview.value = '';
   $('#togglePivotBtn').classList.remove('active'); $('#togglePivotBtn').textContent = 'ピボット設定';
   toggleIkBtn.classList.remove('active'); toggleIkBtn.textContent = 'IKモード';
-  syncStage(); syncArea(); renderParts(); markChanged('初期化済み');
+  syncStage(); syncArea(); renderParts(); syncAnimationUi(); markChanged('初期化済み');
 });
 $('#fitBtn').addEventListener('click', () => {
   const wrap = $('.stage-wrap');
   wrap.scrollTo({ left:Math.max(0,(stage.offsetWidth-wrap.clientWidth)/2), top:0, behavior:'smooth' });
 });
 window.addEventListener('resize', () => {
-  [controlPanel, layerPanel, hierarchyPanel].forEach(panel => {
+  [controlPanel, layerPanel, hierarchyPanel, animationPanel].forEach(panel => {
     const r = panel.getBoundingClientRect();
     if (r.right > innerWidth) panel.style.left = `${Math.max(0, innerWidth - panel.offsetWidth)}px`;
     if (r.bottom > innerHeight) panel.style.top = `${Math.max(0, innerHeight - panel.offsetHeight)}px`;
   });
 });
 window.addEventListener('beforeunload', () => {
+  stopAnimation(false);
   if (state.backgroundUrl) URL.revokeObjectURL(state.backgroundUrl);
   state.liveObjectUrls.forEach(url => URL.revokeObjectURL(url));
 });
@@ -1233,4 +1652,4 @@ document.addEventListener('selectstart', event => event.preventDefault());
 document.addEventListener('dragstart', event => event.preventDefault());
 document.addEventListener('dblclick', event => event.preventDefault(), { passive: false });
 
-syncStage(); syncArea(); renderParts(); updateHistoryButtons();
+syncStage(); syncArea(); renderParts(); syncAnimationUi(); updateHistoryButtons();

@@ -10,7 +10,7 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>キャラクター配置エディタ <span class="version">v8</span></h1>
+      <h1>キャラクター配置エディタ <span class="version">v9</span></h1>
     </div>
     <div class="header-actions">
       <button id="undoBtn" type="button" title="一つ前に戻る">↶ 戻る</button>
@@ -111,8 +111,6 @@
         </div>
       </section>
 
-      </section>
-
       <section class="card ik-card">
         <div class="card-title-row">
           <h2>IK（2関節）</h2>
@@ -136,7 +134,7 @@
           <h2>座標データ</h2>
           <span class="status" id="statusText">未出力</span>
         </div>
-        <p class="hint">画像は含めません。PCは保存ダイアログ、iPadは共有シートの「ファイルに保存」で保存先を選べます。読み込み時は同名パーツへ配置を復元します。</p>
+        <p class="hint">画像は含めません。配置・親子関係に加えて、v9ではタイムラインとキーフレームも保存します。読み込み時は同名パーツへ復元します。</p>
         <div class="button-stack">
           <button id="copyJsonBtn" type="button">座標JSONをコピー</button>
           <button id="downloadJsonBtn" type="button">保存先を選んでJSON保存</button>
@@ -189,6 +187,41 @@
       </label>
     </div>
   </section>
+
+
+<section id="animationPanel" class="floating-panel timeline-panel" data-panel="timeline">
+  <div class="panel-drag-handle">アニメーション / タイムライン <span>ドラッグで移動</span></div>
+  <div class="timeline-body">
+    <div class="timeline-topbar">
+      <label class="motion-name-label">モーション名
+        <input id="motionName" type="text" value="walk01" maxlength="40" />
+      </label>
+      <label>長さ
+        <input id="animDuration" class="numeric-input compact-number" readonly inputmode="none" value="1000" /> ms
+      </label>
+      <label>現在
+        <input id="animTime" class="numeric-input compact-number" readonly inputmode="none" value="0" /> ms
+      </label>
+      <label class="loop-label"><input id="animLoop" type="checkbox" checked /> ループ</label>
+      <span id="animStatus" class="status">0 key</span>
+    </div>
+
+    <div class="timeline-transport">
+      <button id="prevKeyBtn" type="button" title="前のキーフレーム">|◀</button>
+      <button id="playAnimBtn" type="button">▶ 再生</button>
+      <button id="stopAnimBtn" type="button">■ 停止</button>
+      <button id="nextKeyBtn" type="button" title="次のキーフレーム">▶|</button>
+      <button id="addKeyBtn" class="primary-button" type="button">現在の姿勢を登録</button>
+      <button id="deleteKeyBtn" type="button">キー削除</button>
+    </div>
+
+    <div class="timeline-ruler" id="timelineRuler">
+      <input id="timelineSlider" type="range" min="0" max="1000" value="0" step="1" aria-label="タイムライン" />
+      <div id="timelineMarkers" class="timeline-markers" aria-hidden="false"></div>
+    </div>
+    <div class="timeline-help">タイムラインを動かすと補間をプレビュー。そこでパーツやIKを触ると、その時刻の姿勢を編集できます。最後に「現在の姿勢を登録」。</div>
+  </div>
+</section>
 
   <div id="numpadBackdrop" class="numpad-backdrop" hidden>
     <section id="numpad" class="numpad" role="dialog" aria-modal="true" aria-label="数値入力">
