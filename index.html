@@ -10,9 +10,11 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>キャラクター配置エディタ <span class="version">v4</span></h1>
+      <h1>キャラクター配置エディタ <span class="version">v5</span></h1>
     </div>
     <div class="header-actions">
+      <button id="undoBtn" type="button" title="一つ前に戻る">↶ 戻る</button>
+      <button id="redoBtn" type="button" title="一つ先へ進む">↷ 進む</button>
       <button id="togglePivotBtn" type="button">ピボット設定</button>
       <button id="testRunBtn" type="button">試運転</button>
       <button id="resetBtn" class="ghost-button" type="button">初期化</button>
@@ -37,7 +39,7 @@
         <div id="stage" class="stage" aria-label="編集キャンバス">
           <div id="stageEmpty" class="stage-empty">
             <strong>下地スクショを読み込んで位置を合わせます</strong>
-            <span>画像は保存せず、座標だけを書き出します。</span>
+            <span>画像は一時表示だけ。保存するのは座標と親子関係です。</span>
           </div>
           <img id="backgroundImage" class="background-image" alt="PWAスクリーンショット" hidden />
           <div id="characterArea" class="character-area">
@@ -70,7 +72,7 @@
           <h2>選択パーツ</h2>
           <span id="selectedCoord" class="coord-badge">未選択</span>
         </div>
-        <div class="selected-name" id="selectedName">レイヤーから選択</div>
+        <div class="selected-name" id="selectedName">レイヤー / 親子ツリーから選択</div>
         <div class="grid-2">
           <label>X <input id="partX" class="numeric-input" readonly inputmode="none" value="0" /></label>
           <label>Y <input id="partY" class="numeric-input" readonly inputmode="none" value="0" /></label>
@@ -79,13 +81,8 @@
           <label>Pivot X <input id="pivotX" class="numeric-input" readonly inputmode="none" value="0" /></label>
           <label>Pivot Y <input id="pivotY" class="numeric-input" readonly inputmode="none" value="0" /></label>
         </div>
-        <label>親パーツ
-          <select id="parentSelect">
-            <option value="">なし（character-area基準）</option>
-          </select>
-        </label>
-        <p id="pivotModeHint" class="hint">ピボット設定中はパーツ本体を固定し、十字マークだけを動かします。</p>
-        <button id="deletePartBtn" class="danger-link" type="button">選択レイヤーを削除</button>
+        <p id="pivotModeHint" class="hint">ピボット設定中は画像位置を固定したまま、十字だけを移動できます。</p>
+        <button id="deletePartBtn" class="danger-link" type="button">選択パーツを削除</button>
       </section>
 
       <section class="card test-card">
@@ -93,10 +90,18 @@
           <h2>試運転</h2>
           <span id="testStatus" class="status">停止中</span>
         </div>
-        <p class="hint">選択パーツを往復回転させ、子パーツの追従を確認します。保存値は変更しません。</p>
-        <div class="grid-2">
+        <p class="hint">保存値は変更しません。「親子チェーン」では子関節も時間差で揺らします。</p>
+        <label>モード
+          <select id="testMode">
+            <option value="single">選択関節</option>
+            <option value="chain">親子チェーン</option>
+          </select>
+        </label>
+        <div class="grid-2 test-grid">
           <label>振れ幅 <input id="testAmplitude" class="numeric-input" readonly inputmode="none" value="15" />°</label>
           <label>1往復 <input id="testDuration" class="numeric-input" readonly inputmode="none" value="1200" />ms</label>
+          <label>子の振れ率 <input id="testChildScale" class="numeric-input" readonly inputmode="none" value="70" />%</label>
+          <label>時間差 <input id="testDelay" class="numeric-input" readonly inputmode="none" value="100" />ms</label>
         </div>
         <div class="button-row">
           <button id="startTestBtn" type="button">再生</button>
@@ -109,7 +114,7 @@
           <h2>座標データ</h2>
           <span class="status" id="statusText">未出力</span>
         </div>
-        <p class="hint">画像は含めず、配置に必要な数値だけを書き出します。</p>
+        <p class="hint">画像は含めず、配置・親子関係・描画順だけを書き出します。</p>
         <div class="button-stack">
           <button id="copyJsonBtn" type="button">座標JSONをコピー</button>
           <button id="downloadJsonBtn" type="button">座標JSONを保存</button>
@@ -139,9 +144,23 @@
   </section>
 
   <section id="layerPanel" class="floating-panel layer-panel" data-panel="layers">
-    <div class="panel-drag-handle">レイヤー <span>上ほど手前</span></div>
+    <div class="panel-drag-handle">描画レイヤー <span>上ほど手前</span></div>
     <div id="layerList" class="layer-list">
       <div class="layer-empty">パーツ未読込</div>
+    </div>
+  </section>
+
+  <section id="hierarchyPanel" class="floating-panel hierarchy-panel" data-panel="hierarchy">
+    <div class="panel-drag-handle">親子ツリー <span>動きのつながり</span></div>
+    <div id="hierarchyTree" class="hierarchy-tree">
+      <div class="tree-empty">パーツ未読込</div>
+    </div>
+    <div class="hierarchy-parent-editor">
+      <label>選択パーツの親
+        <select id="parentSelect">
+          <option value="">なし（character-area）</option>
+        </select>
+      </label>
     </div>
   </section>
 
