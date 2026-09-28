@@ -10,13 +10,14 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>キャラクター配置エディタ <span class="version">v7</span></h1>
+      <h1>キャラクター配置エディタ <span class="version">v8</span></h1>
     </div>
     <div class="header-actions">
       <button id="undoBtn" type="button" title="一つ前に戻る">↶ 戻る</button>
       <button id="redoBtn" type="button" title="一つ先へ進む">↷ 進む</button>
       <button id="togglePivotBtn" type="button">ピボット設定</button>
       <button id="testRunBtn" type="button">試運転</button>
+      <button id="toggleIkBtn" type="button">IKモード</button>
       <button id="resetBtn" class="ghost-button" type="button">初期化</button>
     </div>
   </header>
@@ -45,6 +46,7 @@
           <div id="characterArea" class="character-area">
             <div class="character-area-label">character-area</div>
           </div>
+          <div id="ikTarget" class="ik-target" hidden aria-hidden="true"></div>
         </div>
       </div>
 
@@ -106,6 +108,26 @@
         <div class="button-row">
           <button id="startTestBtn" type="button">再生</button>
           <button id="stopTestBtn" type="button">停止</button>
+        </div>
+      </section>
+
+      </section>
+
+      <section class="card ik-card">
+        <div class="card-title-row">
+          <h2>IK（2関節）</h2>
+          <span id="ikStatus" class="status">待機中</span>
+        </div>
+        <p class="hint">足先や手先のような末端パーツを選択してからIKモードをONにします。選択パーツに親と祖父親の2関節があるとき、選択パーツまたはターゲット十字をドラッグするとIKで追従します。</p>
+        <div class="grid-2 test-grid">
+          <label>ルート <input id="ikRootName" value="-" readonly /></label>
+          <label>中間 <input id="ikMidName" value="-" readonly /></label>
+          <label>末端 <input id="ikEndName" value="-" readonly /></label>
+          <label>曲げ向き <input id="ikBendName" value="通常" readonly /></label>
+        </div>
+        <div class="button-row">
+          <button id="flipIkBtn" type="button">曲げ向き反転</button>
+          <button id="centerIkBtn" type="button">現在位置へターゲット</button>
         </div>
       </section>
 

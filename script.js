@@ -23,6 +23,9 @@ const selectedName = $('#selectedName');
 const controlModeText = $('#controlModeText');
 const undoBtn = $('#undoBtn');
 const redoBtn = $('#redoBtn');
+const ikTarget = $('#ikTarget');
+const toggleIkBtn = $('#toggleIkBtn');
+const ikStatus = $('#ikStatus');
 
 const state = {
   stage: { width: 390, height: 844 },
@@ -35,6 +38,9 @@ const state = {
   testRaf: 0,
   testStart: 0,
   testRunning: false,
+  ikMode: false,
+  ikBendDir: 1,
+  ikTarget: { x: 0, y: 0 },
   liveObjectUrls: new Set(),
   undoStack: [],
   redoStack: []
@@ -46,7 +52,8 @@ const inputs = {
   partX: $('#partX'), partY: $('#partY'), partW: $('#partW'), partRot: $('#partRot'),
   pivotX: $('#pivotX'), pivotY: $('#pivotY'),
   testAmplitude: $('#testAmplitude'), testDuration: $('#testDuration'),
-  testChildScale: $('#testChildScale'), testDelay: $('#testDelay')
+  testChildScale: $('#testChildScale'), testDelay: $('#testDelay'),
+  ikRootName: $('#ikRootName'), ikMidName: $('#ikMidName'), ikEndName: $('#ikEndName'), ikBendName: $('#ikBendName')
 };
 
 function uid() {
@@ -63,6 +70,12 @@ function int(value, fallback = 0) {
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function degToRad(deg) { return deg * Math.PI / 180; }
 function radToDeg(rad) { return rad * 180 / Math.PI; }
+function normalizeRad(rad) {
+  while (rad > Math.PI) rad -= Math.PI * 2;
+  while (rad < -Math.PI) rad += Math.PI * 2;
+  return rad;
+}
+function dist(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
 function selectedPart() { return state.parts.find(p => p.id === state.selectedId) || null; }
 function partById(id) { return state.parts.find(p => p.id === id) || null; }
 function getPartNode(id) {
@@ -122,6 +135,10 @@ function worldMatrix(part, offsets = null, cache = new Map()) {
   cache.set(part.id, result);
   return result;
 }
+function matrixRotationDeg(m) { return radToDeg(Math.atan2(m.b, m.a)); }
+function worldPoint(part, x, y) { return transformPoint(worldMatrix(part), x, y); }
+function worldPivot(part) { return worldPoint(part, part.pivotX, part.pivotY); }
+
 function decomposeLocalMatrixIntoPart(part, m) {
   const rotation = radToDeg(Math.atan2(m.b, m.a));
   const rpX = m.a * part.pivotX + m.c * part.pivotY;
@@ -142,19 +159,15 @@ function snapshot() {
 }
 function restoreSnapshot(snap) {
   stopTest();
+  disableIkMode(true);
   state.stage = { ...snap.stage };
   state.area = { ...snap.area };
   state.parts = snap.parts.map(p => ({ ...p }));
   state.selectedId = snap.selectedId && state.parts.some(p => p.id === snap.selectedId) ? snap.selectedId : (state.parts.at(-1)?.id || null);
-  // ---------- v7: prevent accidental browser gestures in the editor ----------
-// CSS touch-action handles normal double-tap zoom. These event guards cover
-// Safari long-press callouts/text selection and older edge cases.
-document.addEventListener('contextmenu', event => event.preventDefault());
-document.addEventListener('selectstart', event => event.preventDefault());
-document.addEventListener('dragstart', event => event.preventDefault());
-document.addEventListener('dblclick', event => event.preventDefault(), { passive: false });
-
-syncStage(); syncArea(); renderParts(); updateHistoryButtons();
+  syncStage();
+  syncArea();
+  renderParts();
+  updateHistoryButtons();
 }
 function pushHistory() {
   state.undoStack.push(snapshot());
@@ -236,7 +249,10 @@ function renderParts() {
   renderHierarchy();
   refreshParentSelect();
   syncInspector();
+  refreshIkUi();
+  updateIkTargetVisual();
 }
+
 
 // ---------- flat layer panel ----------
 function renderLayers() {
@@ -365,9 +381,10 @@ function syncInspector() {
   parentSelect.disabled = disabled || locked;
   ['areaX','areaY','areaW','areaH'].forEach(key => inputs[key].disabled = state.pivotMode || state.testRunning);
   document.body.classList.toggle('pivot-mode', state.pivotMode);
-  $$('.rotate-btn', controlPanel).forEach(b => b.disabled = disabled || locked);
+  document.body.classList.toggle('ik-mode', state.ikMode);
+  $$('.rotate-btn', controlPanel).forEach(b => b.disabled = disabled || locked || state.ikMode);
   $$('.nudge-btn', controlPanel).forEach(b => b.disabled = disabled || state.testRunning);
-  controlModeText.textContent = state.pivotMode ? 'ピボット移動 1px / 十字を直接ドラッグ可' : 'パーツ移動 1px / 回転 1°';
+  controlModeText.textContent = state.ikMode ? 'IKターゲットをドラッグ / 末端パーツを掴んでIK' : (state.pivotMode ? 'ピボット移動 1px / 十字を直接ドラッグ可' : 'パーツ移動 1px / 回転 1°');
 
   if (!part) {
     selectedCoord.textContent = '未選択';
@@ -388,8 +405,174 @@ function selectPart(id) {
   if (!id || !partById(id)) return;
   stopTest();
   state.selectedId = id;
-  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector();
+  if (state.ikMode && !currentIkChain()) state.ikMode = false;
+  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi();
 }
+
+
+// ---------- IK (2-bone) ----------
+function currentIkChain() {
+  const end = selectedPart();
+  const lower = end?.parentId ? partById(end.parentId) : null;
+  const upper = lower?.parentId ? partById(lower.parentId) : null;
+  if (!end || !lower || !upper) return null;
+  return { upper, lower, end };
+}
+function refreshIkUi() {
+  const chain = currentIkChain();
+  inputs.ikRootName.value = chain?.upper?.name || '-';
+  inputs.ikMidName.value = chain?.lower?.name || '-';
+  inputs.ikEndName.value = chain?.end?.name || '-';
+  inputs.ikBendName.value = state.ikBendDir > 0 ? '通常' : '反転';
+  const active = state.ikMode && !!chain;
+  toggleIkBtn.classList.toggle('active', active);
+  toggleIkBtn.textContent = active ? 'IKモード中' : 'IKモード';
+  if (state.ikMode) {
+    ikStatus.textContent = chain ? `${chain.end.name} をIK操作中` : '末端パーツを選択してください';
+  } else {
+    ikStatus.textContent = chain ? '準備完了' : '親+祖父親が必要';
+  }
+  updateIkTargetVisual();
+}
+function updateIkTargetVisual() {
+  if (!state.ikMode || !currentIkChain()) {
+    ikTarget.hidden = true;
+    return;
+  }
+  ikTarget.hidden = false;
+  ikTarget.style.left = `${state.ikTarget.x}px`;
+  ikTarget.style.top = `${state.ikTarget.y}px`;
+}
+function setIkTargetToCurrentEffector() {
+  const chain = currentIkChain();
+  if (!chain) return;
+  const p = worldPivot(chain.end);
+  state.ikTarget.x = p.x;
+  state.ikTarget.y = p.y;
+  updateIkTargetVisual();
+}
+function disableIkMode(silent = false) {
+  state.ikMode = false;
+  ikTarget.hidden = true;
+  if (!silent) markChanged('IKモード終了');
+  refreshIkUi();
+  syncInspector();
+}
+function enableIkMode() {
+  stopTest();
+  const chain = currentIkChain();
+  if (!chain) {
+    state.ikMode = false;
+    refreshIkUi();
+    alert(`IKは「末端パーツ」に親と祖父親がある2関節チェーンで使えます。\n例: 足 → すね → 太腿`);
+    return false;
+  }
+  state.pivotMode = false;
+  $('#togglePivotBtn').classList.remove('active');
+  $('#togglePivotBtn').textContent = 'ピボット設定';
+  state.ikMode = true;
+  setIkTargetToCurrentEffector();
+  refreshIkUi();
+  syncInspector();
+  markChanged('IKモード開始');
+  return true;
+}
+function solveIkTo(targetX, targetY) {
+  const chain = currentIkChain();
+  if (!chain) return false;
+  const { upper, lower, end } = chain;
+  const parentOfUpper = upper.parentId ? partById(upper.parentId) : null;
+  const root = worldPivot(upper);
+  const knee = worldPivot(lower);
+  const tip = worldPivot(end);
+  const l1 = Math.max(0.0001, dist(root, knee));
+  const l2 = Math.max(0.0001, dist(knee, tip));
+  const upperWorld = worldMatrix(upper);
+  const lowerWorld = worldMatrix(lower);
+  const endWorld = worldMatrix(end);
+  const upperWorldRot = matrixRotationDeg(upperWorld);
+  const lowerWorldRot = matrixRotationDeg(lowerWorld);
+  const endWorldRot = matrixRotationDeg(endWorld);
+  const upperBoneNow = Math.atan2(knee.y - root.y, knee.x - root.x);
+  const lowerBoneNow = Math.atan2(tip.y - knee.y, tip.x - knee.x);
+  const upperOffset = normalizeRad(upperBoneNow - degToRad(upperWorldRot));
+  const lowerOffset = normalizeRad(lowerBoneNow - degToRad(lowerWorldRot));
+  const target = { x: targetX, y: targetY };
+  const dRaw = dist(root, target);
+  const d = clamp(dRaw, Math.abs(l1 - l2) + 0.0001, l1 + l2 - 0.0001);
+  const base = Math.atan2(target.y - root.y, target.x - root.x);
+  const cosA = clamp((l1*l1 + d*d - l2*l2) / (2*l1*d), -1, 1);
+  const angleA = Math.acos(cosA);
+  const upperBone = base - state.ikBendDir * angleA;
+  const cosK = clamp((l1*l1 + l2*l2 - d*d) / (2*l1*l2), -1, 1);
+  const kneeInterior = Math.acos(cosK);
+  const lowerBone = upperBone + state.ikBendDir * (Math.PI - kneeInterior);
+  const desiredUpperWorldRot = radToDeg(upperBone - upperOffset);
+  const desiredLowerWorldRot = radToDeg(lowerBone - lowerOffset);
+  const parentUpperWorldRot = parentOfUpper ? matrixRotationDeg(worldMatrix(parentOfUpper)) : 0;
+  upper.rotation = desiredUpperWorldRot - parentUpperWorldRot;
+  lower.rotation = desiredLowerWorldRot - desiredUpperWorldRot;
+  end.rotation = endWorldRot - desiredLowerWorldRot;
+  state.ikTarget.x = targetX;
+  state.ikTarget.y = targetY;
+  applyAllPartStyles();
+  syncInspector();
+  updateIkTargetVisual();
+  return true;
+}
+function startIkDrag(pointerId, startClientX, startClientY, sourceEl) {
+  const chain = currentIkChain();
+  if (!state.ikMode || !chain) return false;
+  pushHistory();
+  const move = e => {
+    const point = pointerToArea(e.clientX, e.clientY);
+    solveIkTo(point.x, point.y);
+    if (state.dragRaf) return;
+    state.dragRaf = requestAnimationFrame(() => {
+      state.dragRaf = 0;
+      markChanged('IK移動');
+    });
+  };
+  const end = () => {
+    sourceEl.removeEventListener('pointermove', move);
+    sourceEl.removeEventListener('pointerup', end);
+    sourceEl.removeEventListener('pointercancel', end);
+  };
+  sourceEl.setPointerCapture?.(pointerId);
+  sourceEl.addEventListener('pointermove', move);
+  sourceEl.addEventListener('pointerup', end);
+  sourceEl.addEventListener('pointercancel', end);
+  const start = pointerToArea(startClientX, startClientY);
+  solveIkTo(start.x, start.y);
+  return true;
+}
+
+toggleIkBtn.addEventListener('click', () => {
+  if (state.ikMode) disableIkMode();
+  else enableIkMode();
+});
+$('#flipIkBtn').addEventListener('click', () => {
+  state.ikBendDir *= -1;
+  refreshIkUi();
+  if (state.ikMode) {
+    pushHistory();
+    solveIkTo(state.ikTarget.x, state.ikTarget.y);
+    markChanged('IKの曲げ向きを反転');
+  }
+});
+$('#centerIkBtn').addEventListener('click', () => {
+  if (!currentIkChain()) return;
+  if (!state.ikMode) enableIkMode();
+  setIkTargetToCurrentEffector();
+  refreshIkUi();
+  markChanged('IKターゲットを現在位置へ');
+});
+ikTarget.addEventListener('pointerdown', event => {
+  if (!state.ikMode) return;
+  event.preventDefault();
+  event.stopPropagation();
+  startIkDrag(event.pointerId, event.clientX, event.clientY, ikTarget);
+});
 
 // ---------- part drag ----------
 function areaScale() {
@@ -421,6 +604,14 @@ function onPartPointerDown(event) {
   const node = event.currentTarget;
   const id = node.dataset.id;
   selectPart(id);
+  if (state.ikMode && !state.testRunning) {
+    const chain = currentIkChain();
+    if (chain && chain.end.id === id) {
+      event.preventDefault();
+      startIkDrag(event.pointerId, event.clientX, event.clientY, node);
+      return;
+    }
+  }
   if (state.pivotMode || state.testRunning) return;
   event.preventDefault();
   const part = selectedPart();
@@ -598,6 +789,7 @@ function getImageSize(url) {
 // ---------- pivot mode ----------
 $('#togglePivotBtn').addEventListener('click', event => {
   stopTest();
+  if (!state.pivotMode && state.ikMode) disableIkMode(true);
   state.pivotMode = !state.pivotMode;
   event.currentTarget.classList.toggle('active', state.pivotMode);
   event.currentTarget.textContent = state.pivotMode ? 'ピボット設定中' : 'ピボット設定';
@@ -747,6 +939,7 @@ function descendantsWithDepth(rootId) {
   return result;
 }
 function startTest() {
+  disableIkMode(true);
   stopTest();
   const part = selectedPart();
   if (!part || !part.visible) { testStatus.textContent = 'パーツを選択'; return; }
@@ -798,7 +991,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 7,
+    version: 8,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     parts: [...state.parts].sort((a,b) => a.order - b.order).map(p => ({
@@ -1007,12 +1200,13 @@ $('#resetBtn').addEventListener('click', () => {
   stopTest(); pushHistory();
   state.stage = { width:390, height:844 };
   state.area = { x:12, y:18, width:160, height:220 };
-  state.parts = []; state.selectedId = null; state.pivotMode = false;
+  state.parts = []; state.selectedId = null; state.pivotMode = false; state.ikMode = false;
   if (state.backgroundUrl) URL.revokeObjectURL(state.backgroundUrl);
   state.backgroundUrl = '';
   backgroundImage.hidden = true; backgroundImage.removeAttribute('src'); stageEmpty.hidden = false;
   jsonPreview.value = '';
   $('#togglePivotBtn').classList.remove('active'); $('#togglePivotBtn').textContent = 'ピボット設定';
+  toggleIkBtn.classList.remove('active'); toggleIkBtn.textContent = 'IKモード';
   syncStage(); syncArea(); renderParts(); markChanged('初期化済み');
 });
 $('#fitBtn').addEventListener('click', () => {
