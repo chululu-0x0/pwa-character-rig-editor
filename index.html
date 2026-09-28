@@ -10,7 +10,7 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>キャラクター配置エディタ <span class="version">v10</span></h1>
+      <h1>キャラクター配置エディタ <span class="version">v11</span></h1>
     </div>
     <div class="header-actions">
       <button id="undoBtn" type="button" title="一つ前に戻る">↶ 戻る</button>
@@ -134,7 +134,7 @@
           <h2>座標データ</h2>
           <span class="status" id="statusText">未出力</span>
         </div>
-        <p class="hint">画像は含めません。配置・親子関係に加えて、v10ではタイムラインとキーフレームも保存します。読み込み時は同名パーツへ復元します。</p>
+        <p class="hint">画像は含めません。配置・親子関係に加えて、v11ではパーツ別アニメーショントラックも保存します。読み込み時は同名パーツへ復元します。</p>
         <div class="button-stack">
           <button id="copyJsonBtn" type="button">座標JSONをコピー</button>
           <button id="downloadJsonBtn" type="button">保存先を選んでJSON保存</button>
@@ -190,8 +190,11 @@
 
 
 <section id="animationPanel" class="floating-panel timeline-panel" data-panel="timeline">
-  <div class="panel-drag-handle">アニメーション / タイムライン <span>ドラッグで移動</span></div>
-  <div class="timeline-body">
+  <div class="panel-drag-handle timeline-handle">
+    <span>アニメーション / タイムライン <small>パーツ別トラック</small></span>
+    <button id="timelineCollapseBtn" class="panel-mini-button" type="button" title="タイムラインを折りたたむ">−</button>
+  </div>
+  <div id="timelineBody" class="timeline-body">
     <div class="timeline-topbar">
       <label class="motion-name-label">モーション名
         <input id="motionName" type="text" value="walk01" maxlength="40" />
@@ -206,30 +209,53 @@
       <span id="animStatus" class="status">0 key</span>
     </div>
 
-    <div class="timeline-transport">
-      <button id="prevKeyBtn" type="button" title="前のキーフレーム">|◀</button>
+    <div class="timeline-transport compact-transport">
+      <button id="prevKeyBtn" type="button" title="前のキー">|◀</button>
       <button id="playAnimBtn" type="button">▶ 再生</button>
       <button id="stopAnimBtn" type="button">■ 停止</button>
-      <button id="nextKeyBtn" type="button" title="次のキーフレーム">▶|</button>
+      <button id="nextKeyBtn" type="button" title="次のキー">▶|</button>
+      <label class="scope-label">登録対象
+        <select id="keyScope">
+          <option value="selected">選択パーツ</option>
+          <option value="children">選択＋子</option>
+          <option value="ik">IKチェーン</option>
+          <option value="all">全パーツ</option>
+        </select>
+      </label>
       <button id="addKeyBtn" class="primary-button" type="button">新規キー登録</button>
-      <button id="duplicateKeyBtn" type="button">選択キーを複製</button>
-      <button id="overwriteKeyBtn" class="primary-button" type="button">上書き登録</button>
-      <button id="deleteKeyBtn" type="button">キー削除</button>
+      <button id="duplicateKeyBtn" type="button">複製</button>
+      <button id="overwriteKeyBtn" class="primary-button" type="button">上書き</button>
+      <button id="deleteKeyBtn" type="button">削除</button>
     </div>
 
-    <div class="key-edit-row">
+    <div class="key-edit-row compact-key-edit">
       <span id="selectedKeyLabel" class="selected-key-label">キー未選択</span>
       <label>キー時刻
         <input id="selectedKeyTime" class="numeric-input compact-number" readonly inputmode="none" value="0" disabled /> ms
       </label>
-      <span id="keyEditStatus" class="key-edit-status">タイムライン上の◆を選択</span>
+      <span id="keyEditStatus" class="key-edit-status">トラック上の◆を選択</span>
     </div>
 
-    <div class="timeline-ruler" id="timelineRuler">
+    <div class="timeline-ruler compact-ruler" id="timelineRuler">
       <input id="timelineSlider" type="range" min="0" max="1000" value="0" step="1" aria-label="タイムライン" />
-      <div id="timelineMarkers" class="timeline-markers" aria-hidden="false"></div>
+      <div class="timeline-time-labels"><span>0</span><span id="timelineEndLabel">1000ms</span></div>
     </div>
-    <div class="timeline-help">◆を選ぶと登録済みキーを編集できます。◆を左右ドラッグすると時刻だけを変更。姿勢や時刻を直したら「上書き登録」で確定します。</div>
+
+    <div class="track-toolbar">
+      <label>トラック
+        <select id="trackViewMode">
+          <option value="focus">選択周辺</option>
+          <option value="all">全パーツ</option>
+        </select>
+      </label>
+      <button id="trackRowsToggleBtn" type="button">トラックを隠す</button>
+      <span class="track-hint">通常は選択パーツ＋親子だけ表示。全パーツでも枠内スクロール。</span>
+    </div>
+
+    <div id="trackViewport" class="track-viewport">
+      <div id="trackList" class="track-list"></div>
+    </div>
+    <div class="timeline-help">各行が独立したパーツトラックです。◆を選択・左右ドラッグでms変更。IKで姿勢を作った後は「IKチェーン」で3パーツ同時登録できます。</div>
   </div>
 </section>
 

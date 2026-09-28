@@ -298,3 +298,104 @@ body.animation-playing #ikTarget { display: none !important; }
 }
 .timeline-ruler { height: 54px; }
 .timeline-markers { height: 25px; }
+
+/* v11: compact per-part track timeline */
+.timeline-panel {
+  width: min(760px, calc(100vw - 300px));
+  min-width: 540px;
+  max-height: min(310px, calc(100vh - 28px));
+  overflow: hidden;
+}
+.timeline-handle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-right: 6px;
+}
+.timeline-handle small { font-size: 9px; font-weight: 500; opacity: .65; margin-left: 5px; }
+.panel-mini-button {
+  width: 28px;
+  min-width: 28px;
+  height: 24px;
+  padding: 0;
+  border-radius: 7px;
+  font-size: 16px;
+  line-height: 1;
+}
+.timeline-body { padding: 7px 9px 8px; }
+.compact-transport { margin: 6px 0 5px; gap: 5px; align-items: center; }
+.compact-transport button { padding: 5px 7px; }
+.scope-label { display:flex; align-items:center; gap:4px; font-size:10px; white-space:nowrap; }
+.scope-label select, .track-toolbar select { padding: 4px 23px 4px 7px; font-size: 10px; }
+.compact-key-edit { padding: 5px 7px; margin: 3px 0; min-height: 32px; }
+.compact-ruler { height: 32px !important; padding-top: 2px; margin-bottom: 2px; }
+.compact-ruler #timelineSlider { top: 4px; }
+.timeline-time-labels {
+  position:absolute; left:2px; right:2px; bottom:0;
+  display:flex; justify-content:space-between;
+  font-size:8px; color:#8b7d75; pointer-events:none;
+}
+.track-toolbar {
+  display:flex; align-items:center; gap:7px;
+  min-height:28px; padding:3px 5px;
+  border-top:1px solid rgba(215,206,197,.8);
+}
+.track-toolbar label { display:flex; align-items:center; gap:4px; font-size:10px; white-space:nowrap; }
+.track-toolbar button { padding:4px 7px; font-size:10px; }
+.track-hint { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9px; color:#8b7d75; }
+.track-viewport {
+  max-height: 96px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,.48);
+}
+.track-list { min-height: 27px; }
+.track-row {
+  display:grid;
+  grid-template-columns: 118px minmax(220px,1fr);
+  min-height: 27px;
+  border-bottom:1px solid rgba(215,206,197,.62);
+}
+.track-row:last-child { border-bottom:0; }
+.track-row.selected-part { background: rgba(127,98,168,.07); }
+.track-label {
+  min-width:0; height:27px; padding-top:0; padding-bottom:0;
+  border:0; border-right:1px solid rgba(215,206,197,.75);
+  border-radius:0; box-shadow:none; background:rgba(250,247,243,.8);
+  text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-size:10px; color:#554d49;
+}
+.track-row.selected-part .track-label { font-weight:700; color:#6a4a91; background:#f2ebf8; }
+.track-lane {
+  position:relative;
+  height:27px;
+  background-image: linear-gradient(to right, rgba(127,98,168,.08) 1px, transparent 1px);
+  background-size: 10% 100%;
+}
+.track-playhead {
+  position:absolute; top:0; bottom:0; width:1px; background:rgba(202,86,86,.72);
+  transform:translateX(-.5px); pointer-events:none; z-index:1;
+}
+.track-key {
+  position:absolute; top:7px; z-index:3;
+  width:12px; height:12px; padding:0;
+  border:1px solid #6e568f; border-radius:2px;
+  background:#efe5fa; box-shadow:none;
+  transform:translateX(-50%) rotate(45deg);
+  touch-action:none;
+}
+.track-key.selected { outline:2px solid rgba(127,98,168,.30); outline-offset:2px; background:var(--accent); border-color:var(--accent); }
+.track-key.draft { background:#f1a84a; border-color:#c87717; }
+.track-empty { padding:8px 10px; font-size:10px; color:#8b7d75; }
+.timeline-help { margin-top:4px; max-height:28px; overflow:hidden; }
+.timeline-panel:has(#timelineBody[hidden]) { min-width:260px; width:340px; }
+#timelineBody[hidden] { display:none !important; }
+#trackViewport[hidden] { display:none !important; }
+
+@media (max-width: 1000px) {
+  .timeline-panel { left: 12px; width: calc(100vw - 24px); min-width: 0; }
+  .track-row { grid-template-columns: 104px minmax(180px,1fr); }
+}
