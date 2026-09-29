@@ -10,7 +10,7 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>キャラクター配置エディタ <span class="version">v16</span></h1>
+      <h1>キャラクター配置エディタ <span class="version">v17</span></h1>
     </div>
     <div class="header-actions">
       <button id="undoBtn" type="button" title="一つ前に戻る">↶ 戻る</button>
@@ -47,6 +47,8 @@
             <span>画像は一時表示だけ。保存するのは座標と親子関係です。</span>
           </div>
           <img id="backgroundImage" class="background-image" alt="PWAスクリーンショット" hidden />
+          <div id="onionPrevLayer" class="onion-layer onion-prev" aria-hidden="true"></div>
+          <div id="onionNextLayer" class="onion-layer onion-next" aria-hidden="true"></div>
           <div id="characterArea" class="character-area">
             <div class="character-area-label">character-area</div>
           </div>
@@ -169,6 +171,7 @@
       <div class="group-action-buttons">
         <button id="groupBackBtn" type="button" title="グループを奥へ">↓奥</button>
         <button id="groupFrontBtn" type="button" title="グループを手前へ">↑前</button>
+        <button id="groupVisibilityBtn" type="button" title="グループ全体の表示/非表示">👁 表示</button>
         <button id="renameGroupBtn" type="button" title="グループ名を変更">✎ 名前</button>
         <button id="duplicateGroupBtn" type="button" title="グループを丸ごと複製">⧉ 複製</button>
         <button id="shiftGroupTimeBtn" type="button" title="グループの全キーを時間移動">↔ 時間</button>
@@ -245,6 +248,7 @@
 
     <div class="track-toolbar">
       <span class="track-hint">1グループ＝1トラック。グループを選ぶとレイヤー表示も切り替わります。</span>
+      <label class="onion-toggle" title="選択グループの前後キーを半透明表示"><input id="onionSkinToggle" type="checkbox" checked /> オニオン</label>
       <button id="trackRowsToggleBtn" type="button">トラックを隠す</button>
     </div>
 

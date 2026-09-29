@@ -17,6 +17,7 @@ const layerGroupSelect = $('#layerGroupSelect');
 const layerNewGroupBtn = $('#layerNewGroupBtn');
 const groupBackBtn = $('#groupBackBtn');
 const groupFrontBtn = $('#groupFrontBtn');
+const groupVisibilityBtn = $('#groupVisibilityBtn');
 const renameGroupBtn = $('#renameGroupBtn');
 const duplicateGroupBtn = $('#duplicateGroupBtn');
 const shiftGroupTimeBtn = $('#shiftGroupTimeBtn');
@@ -56,12 +57,15 @@ const duplicateKeyBtn = $('#duplicateKeyBtn');
 const deleteKeyBtn = $('#deleteKeyBtn');
 const timelineCollapseBtn = $('#timelineCollapseBtn');
 const trackRowsToggleBtn = $('#trackRowsToggleBtn');
+const onionSkinToggle = $('#onionSkinToggle');
+const onionPrevLayer = $('#onionPrevLayer');
+const onionNextLayer = $('#onionNextLayer');
 
 const state = {
   stage: { width: 390, height: 844 },
   area: { x: 12, y: 18, width: 160, height: 220 },
   parts: [],
-  groups: [{ id:'group-default', name:'未分類' }],
+  groups: [{ id:'group-default', name:'未分類', visible:true }],
   activeGroupId: 'group-default',
   selectedId: null,
   groupMoveMode: false,
@@ -79,7 +83,7 @@ const state = {
     tracks: {}, areaKeys: [], playing: false, raf: 0, playStartedAt: 0, playStartTime: 0,
     previewActive: false, previewPose: null,
     selectedGroupId: null, selectedKeyTime: null, keyDraftTime: null, keyDirty: false,
-    timelineCollapsed: false, tracksHidden: false
+    timelineCollapsed: false, tracksHidden: false, onionSkin: true
   },
   liveObjectUrls: new Set(),
   undoStack: [],
@@ -199,13 +203,15 @@ function decomposeLocalMatrixIntoPart(part, m) {
 // ---------- groups + animation / group tracks ----------
 function makeGroupId() { return `group-${Date.now()}-${Math.random().toString(36).slice(2,7)}`; }
 function ensureGroups() {
-  if (!Array.isArray(state.groups) || !state.groups.length) state.groups = [{ id:'group-default', name:'未分類' }];
+  if (!Array.isArray(state.groups) || !state.groups.length) state.groups = [{ id:'group-default', name:'未分類', visible:true }];
+  state.groups.forEach(g => { if (typeof g.visible !== 'boolean') g.visible = true; });
   const ids = new Set(state.groups.map(g => g.id));
   state.parts.forEach(p => { if (!p.groupId || !ids.has(p.groupId)) p.groupId = state.groups[0].id; });
   if (!state.activeGroupId || !ids.has(state.activeGroupId)) state.activeGroupId = state.groups[0].id;
 }
 function groupById(id) { ensureGroups(); return state.groups.find(g => g.id === id) || null; }
 function activeGroup() { return groupById(state.activeGroupId); }
+function isGroupVisible(groupId) { const g=groupById(groupId); return !g || g.visible !== false; }
 function partsInGroup(groupId) { return state.parts.filter(p => p.groupId === groupId).sort((a,b)=>a.order-b.order); }
 function groupIndex(groupId) { ensureGroups(); return Math.max(0, state.groups.findIndex(g => g.id === groupId)); }
 function effectiveZIndex(part) { return (groupIndex(part.groupId) + 1) * 10000 + (part.order || 1); }
@@ -213,6 +219,13 @@ function syncGroupLayerButtons() {
   const i = groupIndex(state.activeGroupId);
   if (groupBackBtn) groupBackBtn.disabled = i <= 0;
   if (groupFrontBtn) groupFrontBtn.disabled = i < 0 || i >= state.groups.length - 1;
+  const group = activeGroup();
+  if (groupVisibilityBtn) {
+    const visible = !group || group.visible !== false;
+    groupVisibilityBtn.textContent = visible ? '👁 表示' : '— 非表示';
+    groupVisibilityBtn.classList.toggle('group-hidden', !visible);
+    groupVisibilityBtn.disabled = !group;
+  }
 }
 function moveActiveGroupLayer(direction) {
   ensureGroups();
@@ -249,14 +262,14 @@ function switchActiveGroup(groupId) {
   const members = partsInGroup(groupId);
   if (!selectedPart() || selectedPart().groupId !== groupId) state.selectedId = members[0]?.id || null;
   clearKeySelection(false);
-  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi(); renderTrackList();
+  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi(); renderTrackList(); renderOnionSkins();
   markChanged(`グループ: ${groupById(groupId)?.name || ''}`);
 }
 function createGroupFromUi() {
   const name = (window.prompt('新しいグループ名', '新規グループ') || '').trim();
   if (!name) return;
   pushHistory();
-  const group = { id:makeGroupId(), name };
+  const group = { id:makeGroupId(), name, visible:true };
   state.groups.push(group); state.activeGroupId = group.id;
   refreshGroupSelects(); switchActiveGroup(group.id);
   markChanged(`グループ作成: ${name}`);
@@ -314,7 +327,7 @@ function duplicateActiveGroup() {
   commitAnimationPreview();
   pushHistory();
 
-  const newGroup = { id: makeGroupId(), name: newName };
+  const newGroup = { id: makeGroupId(), name: newName, visible: sourceGroup.visible !== false };
   state.groups.push(newGroup);
   const idMap = new Map();
   const clones = [];
@@ -456,7 +469,7 @@ function deleteActiveGroup() {
   state.parts = state.parts.filter(p => !ids.has(p.id));
   const idx = state.groups.findIndex(g=>g.id===group.id);
   state.groups = state.groups.filter(g=>g.id!==group.id);
-  if (!state.groups.length) state.groups = [{ id:makeGroupId(), name:'未分類' }];
+  if (!state.groups.length) state.groups = [{ id:makeGroupId(), name:'未分類', visible:true }];
   state.activeGroupId = state.groups[Math.min(Math.max(idx,0), state.groups.length-1)].id;
   state.selectedId = partsInGroup(state.activeGroupId)[0]?.id || state.parts[0]?.id || null;
   clearKeySelection(false); setGroupMoveMode(false); normalizeOrders(); refreshGroupSelects(); renderParts(); syncAnimationUi();
@@ -469,7 +482,7 @@ function freshAnimation() {
     tracks: {}, areaKeys: [], playing: false, raf: 0, playStartedAt: 0, playStartTime: 0,
     previewActive: false, previewPose: null,
     selectedGroupId: null, selectedKeyTime: null, keyDraftTime: null, keyDirty: false,
-    timelineCollapsed: false, tracksHidden: false
+    timelineCollapsed: false, tracksHidden: false, onionSkin: true
   };
 }
 function cloneTrackKey(key) { return { ...key }; }
@@ -483,7 +496,7 @@ function animationForSnapshot() {
     tracks, areaKeys:(a.areaKeys||[]).map(cloneAreaKey),
     selectedGroupId:a.selectedGroupId || null, selectedKeyTime:a.selectedKeyTime,
     keyDraftTime:a.keyDraftTime, keyDirty:!!a.keyDirty,
-    timelineCollapsed:!!a.timelineCollapsed, tracksHidden:!!a.tracksHidden
+    timelineCollapsed:!!a.timelineCollapsed, tracksHidden:!!a.tracksHidden, onionSkin:a.onionSkin !== false
   };
 }
 function ensureTrack(part) {
@@ -578,24 +591,93 @@ function worldMatrixFromPose(part, poseMap, cache=new Map()) {
 }
 function applyPreviewPose(pose) {
   if(!pose)return; characterArea.style.left=`${pose.area.x}px`; characterArea.style.top=`${pose.area.y}px`; const cache=new Map();
-  state.parts.forEach(part=>{ const node=getPartNode(part.id); if(!node)return; const pp=pose.parts.get(part.id), m=worldMatrixFromPose(part,pose.parts,cache); node.style.width=`${pp?.width??part.width}px`; node.style.transformOrigin='0 0'; node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`; node.style.zIndex=String(effectiveZIndex(part)); node.classList.toggle('hidden-layer',!part.visible); });
+  state.parts.forEach(part=>{ const node=getPartNode(part.id); if(!node)return; const pp=pose.parts.get(part.id), m=worldMatrixFromPose(part,pose.parts,cache); node.style.width=`${pp?.width??part.width}px`; node.style.transformOrigin='0 0'; node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`; node.style.zIndex=String(effectiveZIndex(part)); node.classList.toggle('hidden-layer',!part.visible || !isGroupVisible(part.groupId)); });
 }
+
+function clearOnionLayers() {
+  [onionPrevLayer,onionNextLayer].forEach(layer => {
+    if (!layer) return;
+    layer.replaceChildren();
+    layer.hidden = true;
+  });
+}
+function adjacentGroupKeyTimes(groupId, time) {
+  const times = groupKeyTimes(groupId);
+  if (times.length < 2) return { prev:null, next:null };
+  const t = num(time,0);
+  const exactIndex = times.findIndex(v => Math.abs(v-t)<=1);
+  let prev = null, next = null;
+  if (exactIndex >= 0) {
+    prev = exactIndex > 0 ? times[exactIndex-1] : (state.animation.loop ? times[times.length-1] : null);
+    next = exactIndex < times.length-1 ? times[exactIndex+1] : (state.animation.loop ? times[0] : null);
+  } else {
+    prev = [...times].reverse().find(v => v < t) ?? (state.animation.loop ? times[times.length-1] : null);
+    next = times.find(v => v > t) ?? (state.animation.loop ? times[0] : null);
+  }
+  if (prev != null && next != null && Math.abs(prev-next)<=1) next = null;
+  return { prev, next };
+}
+function renderOnionPose(layer, groupId, time) {
+  if (!layer) return;
+  layer.replaceChildren();
+  const group = groupById(groupId);
+  if (!group || group.visible === false) { layer.hidden=true; return; }
+  const pose = interpolatedPoseAt(time);
+  if (!pose) { layer.hidden=true; return; }
+  layer.hidden=false;
+  layer.style.left=`${pose.area.x}px`;
+  layer.style.top=`${pose.area.y}px`;
+  const cache=new Map();
+  partsInGroup(groupId).forEach(part => {
+    if (!part.visible || !part.objectUrl) return;
+    const pp=pose.parts.get(part.id);
+    const m=worldMatrixFromPose(part,pose.parts,cache);
+    const node=document.createElement('div');
+    node.className='onion-part';
+    node.style.width=`${pp?.width??part.width}px`;
+    node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
+    node.style.zIndex=String(part.order||1);
+    const img=document.createElement('img');
+    img.src=part.objectUrl;
+    img.alt='';
+    img.draggable=false;
+    node.appendChild(img);
+    layer.appendChild(node);
+  });
+}
+function renderOnionSkins() {
+  if (!onionPrevLayer || !onionNextLayer) return;
+  if (!state.animation.onionSkin || state.animation.playing || state.testRunning) {
+    clearOnionLayers(); return;
+  }
+  const group=activeGroup();
+  if (!group || group.visible===false || !partsInGroup(group.id).length) { clearOnionLayers(); return; }
+  const reference = hasSelectedGroupKey()
+    ? num(state.animation.keyDraftTime ?? state.animation.selectedKeyTime, state.animation.currentTime)
+    : state.animation.currentTime;
+  const {prev,next}=adjacentGroupKeyTimes(group.id,reference);
+  if (prev == null) { onionPrevLayer.replaceChildren(); onionPrevLayer.hidden=true; }
+  else renderOnionPose(onionPrevLayer,group.id,prev);
+  if (next == null) { onionNextLayer.replaceChildren(); onionNextLayer.hidden=true; }
+  else renderOnionPose(onionNextLayer,group.id,next);
+}
+
 function applyAnimationPreview(time,{renderTracks=false}={}) {
   const pose=interpolatedPoseAt(time); state.animation.currentTime=clamp(time,0,state.animation.duration); syncTimelineReadout();
-  if(!pose){state.animation.previewActive=false;state.animation.previewPose=null;syncArea();applyAllPartStyles();return;}
-  state.animation.previewActive=true;state.animation.previewPose=pose;applyPreviewPose(pose);syncInspector(); if(renderTracks)renderTrackList();
+  if(!pose){state.animation.previewActive=false;state.animation.previewPose=null;syncArea();applyAllPartStyles();renderOnionSkins();return;}
+  state.animation.previewActive=true;state.animation.previewPose=pose;applyPreviewPose(pose);syncInspector(); if(renderTracks)renderTrackList(); renderOnionSkins();
 }
 function commitAnimationPreview() {
   if(!state.animation.previewActive||!state.animation.previewPose)return false; const pose=state.animation.previewPose;
   state.area.x=pose.area.x;state.area.y=pose.area.y; state.parts.forEach(part=>{const pp=pose.parts.get(part.id);if(!pp)return;part.x=pp.x;part.y=pp.y;part.width=pp.width;part.rotation=pp.rotation;});
   state.animation.previewActive=false;state.animation.previewPose=null;syncArea();applyAllPartStyles();syncInspector();return true;
 }
-function clearAnimationPreview({restore=true}={}) {state.animation.previewActive=false;state.animation.previewPose=null;if(restore){syncArea();applyAllPartStyles();syncInspector();}}
+function clearAnimationPreview({restore=true}={}) {state.animation.previewActive=false;state.animation.previewPose=null;if(restore){syncArea();applyAllPartStyles();syncInspector();}renderOnionSkins();}
 function clearKeySelection(render=true){state.animation.selectedGroupId=null;state.animation.selectedKeyTime=null;state.animation.keyDraftTime=null;state.animation.keyDirty=false;syncKeyEditUi();if(render)renderTrackList();}
 function selectGroupKey(groupId,time,{preview=true}={}) {
   stopAnimation(true); state.animation.selectedGroupId=groupId;state.animation.selectedKeyTime=Math.round(time);state.animation.keyDraftTime=Math.round(time);state.animation.keyDirty=false;state.animation.currentTime=time;
   state.activeGroupId=groupId;refreshGroupSelects(); const members=partsInGroup(groupId); if(!selectedPart()||selectedPart().groupId!==groupId)state.selectedId=members[0]?.id||null;
-  if(preview)applyAnimationPreview(time); renderLayers();renderHierarchy();refreshParentSelect();syncInspector();syncKeyEditUi();syncTimelineReadout();renderTrackList();
+  if(preview)applyAnimationPreview(time); renderLayers();renderHierarchy();refreshParentSelect();syncInspector();syncKeyEditUi();syncTimelineReadout();renderTrackList();renderOnionSkins();
 }
 function hasSelectedGroupKey(){return !!state.animation.selectedGroupId && state.animation.selectedKeyTime!=null;}
 function setSelectedKeyDirty(dirty=true){if(!hasSelectedGroupKey())return;state.animation.keyDirty=!!dirty;syncKeyEditUi();renderTrackList();}
@@ -607,7 +689,7 @@ function syncKeyEditUi(){
   selectedKeyLabel.textContent=`${group?.name||'グループ'} ${original}ms`;
   if(state.animation.keyDirty){keyEditStatus.textContent=`未確定 → ${draft}ms`;keyEditStatus.classList.add('dirty');} else {keyEditStatus.textContent='登録内容と同じ';keyEditStatus.classList.remove('dirty');}
 }
-function setSelectedKeyDraftTime(time,{render=true}={}){if(!hasSelectedGroupKey())return;const original=state.animation.selectedKeyTime;const t=Math.round(clamp(num(time,original),0,state.animation.duration));state.animation.keyDraftTime=t;state.animation.currentTime=t;state.animation.keyDirty=t!==Math.round(original)||state.animation.keyDirty;syncTimelineReadout();syncKeyEditUi();if(render)renderTrackList();}
+function setSelectedKeyDraftTime(time,{render=true}={}){if(!hasSelectedGroupKey())return;const original=state.animation.selectedKeyTime;const t=Math.round(clamp(num(time,original),0,state.animation.duration));state.animation.keyDraftTime=t;state.animation.currentTime=t;state.animation.keyDirty=t!==Math.round(original)||state.animation.keyDirty;syncTimelineReadout();syncKeyEditUi();if(render)renderTrackList();renderOnionSkins();}
 function writePartKey(part,time,pose,{replace=true}={}) {
   const track=ensureTrack(part); const existing=track.keys.find(k=>Math.abs(k.time-time)<=1);
   if(existing && replace) Object.assign(existing,{time,...pose});
@@ -643,7 +725,7 @@ function renderTrackList(){
   if(!trackList)return;ensureGroups();trackList.innerHTML='';const duration=Math.max(1,state.animation.duration);const groups=state.groups.filter(g=>partsInGroup(g.id).length);
   if(!groups.length){trackList.innerHTML='<div class="track-empty">グループを作成してパーツを追加すると表示されます</div>';return;}
   groups.forEach(group=>{
-    const row=document.createElement('div');row.className=`track-row${group.id===state.activeGroupId?' selected-part':''}`;
+    const row=document.createElement('div');row.className=`track-row${group.id===state.activeGroupId?' selected-part':''}${group.visible===false?' group-hidden':''}`;
     const label=document.createElement('button');label.type='button';label.className='track-label';label.textContent=group.name;label.title=`${group.name} (${partsInGroup(group.id).length}パーツ)`;label.addEventListener('click',()=>switchActiveGroup(group.id));
     const lane=document.createElement('div');lane.className='track-lane';const playhead=document.createElement('span');playhead.className='track-playhead';playhead.style.left=`${clamp(state.animation.currentTime/duration,0,1)*100}%`;lane.appendChild(playhead);
     groupKeyTimes(group.id).forEach(time=>{
@@ -656,16 +738,16 @@ function renderTrackList(){
   });
 }
 function totalGroupKeyCount(){return state.groups.reduce((n,g)=>n+groupKeyTimes(g.id).length,0);}
-function syncAnimationUi(){motionName.value=state.animation.name;inputs.animDuration.value=Math.round(state.animation.duration);animLoop.checked=!!state.animation.loop;syncTimelineReadout();animStatus.textContent=`${totalGroupKeyCount()} group key / ${state.groups.filter(g=>groupKeyTimes(g.id).length).length} group`;syncKeyEditUi();renderTrackList();timelineBody.hidden=!!state.animation.timelineCollapsed;timelineCollapseBtn.textContent=state.animation.timelineCollapsed?'+':'−';trackViewport.hidden=!!state.animation.tracksHidden;trackRowsToggleBtn.textContent=state.animation.tracksHidden?'トラックを表示':'トラックを隠す';}
+function syncAnimationUi(){motionName.value=state.animation.name;inputs.animDuration.value=Math.round(state.animation.duration);animLoop.checked=!!state.animation.loop;syncTimelineReadout();animStatus.textContent=`${totalGroupKeyCount()} group key / ${state.groups.filter(g=>groupKeyTimes(g.id).length).length} group`;syncKeyEditUi();renderTrackList();timelineBody.hidden=!!state.animation.timelineCollapsed;timelineCollapseBtn.textContent=state.animation.timelineCollapsed?'+':'−';trackViewport.hidden=!!state.animation.tracksHidden;trackRowsToggleBtn.textContent=state.animation.tracksHidden?'トラックを表示':'トラックを隠す';if(onionSkinToggle)onionSkinToggle.checked=state.animation.onionSkin!==false;renderOnionSkins();}
 function setAnimationTime(time,preview=true){stopAnimation(true);const t=clamp(num(time,0),0,state.animation.duration);if(preview)applyAnimationPreview(t,{renderTracks:true});else{state.animation.currentTime=t;syncTimelineReadout();renderTrackList();}}
 function jumpKey(direction){
   let groupId=state.animation.selectedGroupId||state.activeGroupId;let items=groupKeyTimes(groupId).map(time=>({groupId,time}));
   if(!items.length)state.groups.forEach(g=>groupKeyTimes(g.id).forEach(time=>items.push({groupId:g.id,time})));items.sort((a,b)=>a.time-b.time);if(!items.length)return;
   const t=state.animation.currentTime;let target;if(direction<0)target=[...items].reverse().find(x=>x.time<t-1)||items[0];else target=items.find(x=>x.time>t+1)||items[items.length-1];selectGroupKey(target.groupId,target.time);
 }
-function startAnimation(){stopTest();disableIkMode(true);if(totalTrackKeyCount()<2){animStatus.textContent='キーを2つ以上登録';return;}stopAnimation(true);let startTime=state.animation.currentTime;if(startTime>=state.animation.duration-1)startTime=0;state.animation.playing=true;state.animation.playStartedAt=performance.now();state.animation.playStartTime=startTime;document.body.classList.add('animation-playing');$('#playAnimBtn').classList.add('active');animStatus.textContent='再生中';const frame=now=>{if(!state.animation.playing)return;const elapsed=now-state.animation.playStartedAt;let t=state.animation.playStartTime+elapsed;if(state.animation.loop)t=t%Math.max(1,state.animation.duration);else if(t>=state.animation.duration){t=state.animation.duration;applyAnimationPreview(t);stopAnimation(true);renderTrackList();return;}applyAnimationPreview(t);renderTrackList();state.animation.raf=requestAnimationFrame(frame);};state.animation.raf=requestAnimationFrame(frame);}
-function stopAnimation(keepPreview=true){if(state.animation.raf)cancelAnimationFrame(state.animation.raf);state.animation.raf=0;const was=state.animation.playing;state.animation.playing=false;document.body.classList.remove('animation-playing');$('#playAnimBtn')?.classList.remove('active');if(!keepPreview)clearAnimationPreview();if(was){animStatus.textContent=`${totalGroupKeyCount()} group key`;renderTrackList();}}
-function applyAnimationSnapshot(saved){const fresh=freshAnimation();const tracks={};Object.entries(saved?.tracks||{}).forEach(([id,t])=>tracks[id]=cloneTrack(t));state.animation={...fresh,name:saved?.name||fresh.name,duration:Math.max(100,num(saved?.duration,fresh.duration)),loop:saved?.loop!==false,currentTime:clamp(num(saved?.currentTime,0),0,Math.max(100,num(saved?.duration,fresh.duration))),tracks,areaKeys:Array.isArray(saved?.areaKeys)?saved.areaKeys.map(cloneAreaKey):[],selectedGroupId:saved?.selectedGroupId||null,selectedKeyTime:saved?.selectedKeyTime??null,keyDraftTime:saved?.keyDraftTime??null,keyDirty:!!saved?.keyDirty,timelineCollapsed:!!saved?.timelineCollapsed,tracksHidden:!!saved?.tracksHidden};}
+function startAnimation(){stopTest();disableIkMode(true);clearOnionLayers();if(totalTrackKeyCount()<2){animStatus.textContent='キーを2つ以上登録';return;}stopAnimation(true);let startTime=state.animation.currentTime;if(startTime>=state.animation.duration-1)startTime=0;state.animation.playing=true;state.animation.playStartedAt=performance.now();state.animation.playStartTime=startTime;document.body.classList.add('animation-playing');$('#playAnimBtn').classList.add('active');animStatus.textContent='再生中';const frame=now=>{if(!state.animation.playing)return;const elapsed=now-state.animation.playStartedAt;let t=state.animation.playStartTime+elapsed;if(state.animation.loop)t=t%Math.max(1,state.animation.duration);else if(t>=state.animation.duration){t=state.animation.duration;applyAnimationPreview(t);stopAnimation(true);renderTrackList();return;}applyAnimationPreview(t);renderTrackList();state.animation.raf=requestAnimationFrame(frame);};state.animation.raf=requestAnimationFrame(frame);}
+function stopAnimation(keepPreview=true){if(state.animation.raf)cancelAnimationFrame(state.animation.raf);state.animation.raf=0;const was=state.animation.playing;state.animation.playing=false;document.body.classList.remove('animation-playing');$('#playAnimBtn')?.classList.remove('active');if(!keepPreview)clearAnimationPreview();if(was){animStatus.textContent=`${totalGroupKeyCount()} group key`;renderTrackList();}renderOnionSkins();}
+function applyAnimationSnapshot(saved){const fresh=freshAnimation();const tracks={};Object.entries(saved?.tracks||{}).forEach(([id,t])=>tracks[id]=cloneTrack(t));state.animation={...fresh,name:saved?.name||fresh.name,duration:Math.max(100,num(saved?.duration,fresh.duration)),loop:saved?.loop!==false,currentTime:clamp(num(saved?.currentTime,0),0,Math.max(100,num(saved?.duration,fresh.duration))),tracks,areaKeys:Array.isArray(saved?.areaKeys)?saved.areaKeys.map(cloneAreaKey):[],selectedGroupId:saved?.selectedGroupId||null,selectedKeyTime:saved?.selectedKeyTime??null,keyDraftTime:saved?.keyDraftTime??null,keyDirty:!!saved?.keyDirty,timelineCollapsed:!!saved?.timelineCollapsed,tracksHidden:!!saved?.tracksHidden,onionSkin:saved?.onionSkin!==false};}
 
 motionName.addEventListener('change',()=>{state.animation.name=motionName.value.trim()||'motion';markChanged('モーション名変更');});
 animLoop.addEventListener('change',()=>{state.animation.loop=animLoop.checked;markChanged('ループ設定変更');});
@@ -673,6 +755,20 @@ timelineSlider.addEventListener('input',()=>{stopAnimation(true);clearKeySelecti
 $('#addKeyBtn').addEventListener('click',addNewKeyframe);overwriteKeyBtn.addEventListener('click',overwriteSelectedKeyframe);duplicateKeyBtn.addEventListener('click',duplicateSelectedKeyframe);deleteKeyBtn.addEventListener('click',deleteCurrentKeyframe);$('#prevKeyBtn').addEventListener('click',()=>jumpKey(-1));$('#nextKeyBtn').addEventListener('click',()=>jumpKey(1));$('#playAnimBtn').addEventListener('click',startAnimation);$('#stopAnimBtn').addEventListener('click',()=>stopAnimation(true));
 timelineCollapseBtn.addEventListener('click',e=>{e.stopPropagation();state.animation.timelineCollapsed=!state.animation.timelineCollapsed;syncAnimationUi();});
 trackRowsToggleBtn.addEventListener('click',()=>{state.animation.tracksHidden=!state.animation.tracksHidden;syncAnimationUi();});
+onionSkinToggle?.addEventListener('change',()=>{state.animation.onionSkin=onionSkinToggle.checked;renderOnionSkins();markChanged(state.animation.onionSkin?'オニオンスキンON':'オニオンスキンOFF');});
+
+
+function toggleActiveGroupVisibility() {
+  const group=activeGroup(); if(!group) return;
+  pushHistory();
+  group.visible = group.visible === false;
+  if (state.animation.previewActive && state.animation.previewPose) applyPreviewPose(state.animation.previewPose);
+  else applyAllPartStyles();
+  renderLayers();
+  syncGroupLayerButtons();
+  renderOnionSkins();
+  markChanged(group.visible ? `グループ表示: ${group.name}` : `グループ非表示: ${group.name}`);
+}
 
 partGroupSelect.addEventListener('change',()=>switchActiveGroup(partGroupSelect.value));
 layerGroupSelect.addEventListener('change',()=>switchActiveGroup(layerGroupSelect.value));
@@ -680,6 +776,7 @@ newGroupBtn.addEventListener('click',createGroupFromUi);
 layerNewGroupBtn.addEventListener('click',createGroupFromUi);
 groupBackBtn?.addEventListener('click',()=>moveActiveGroupLayer(-1));
 groupFrontBtn?.addEventListener('click',()=>moveActiveGroupLayer(1));
+groupVisibilityBtn?.addEventListener('click',toggleActiveGroupVisibility);
 renameGroupBtn?.addEventListener('click', renameActiveGroup);
 duplicateGroupBtn?.addEventListener('click', duplicateActiveGroup);
 shiftGroupTimeBtn?.addEventListener('click', shiftActiveGroupKeys);
@@ -768,7 +865,7 @@ function applyPartStyle(part, node = getPartNode(part.id), offsets = null, cache
   node.style.transformOrigin = '0 0';
   node.style.transform = `matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
   node.style.zIndex = String(effectiveZIndex(part));
-  node.classList.toggle('hidden-layer', !part.visible);
+  node.classList.toggle('hidden-layer', !part.visible || !isGroupVisible(part.groupId));
   const pivot = $('.pivot-cross', node);
   pivot.style.left = `${part.pivotX}px`;
   pivot.style.top = `${part.pivotY}px`;
@@ -802,6 +899,7 @@ function renderParts() {
   refreshIkUi();
   updateIkTargetVisual();
   syncAnimationUi();
+  renderOnionSkins();
 }
 
 
@@ -1625,10 +1723,10 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 16,
+    version: 17,
     stage: { ...state.stage },
     characterArea: { ...state.area },
-    groups: state.groups.map(g => ({ id:g.id, name:g.name })),
+    groups: state.groups.map(g => ({ id:g.id, name:g.name, visible:g.visible !== false })),
     activeGroupId: state.activeGroupId,
     parts: [...state.parts].sort((a,b) => a.order - b.order).map(p => ({
       id: p.id,
@@ -1654,6 +1752,7 @@ function exportData() {
       name: state.animation.name,
       duration: Math.round(state.animation.duration),
       loop: state.animation.loop,
+      onionSkin: state.animation.onionSkin !== false,
       currentTime: Math.round(state.animation.currentTime),
       trackFormat: 2,
       displayMode: 'groups',
@@ -1808,7 +1907,7 @@ function importAnimationData(savedAnimation, matches) {
     : Array.isArray(savedAnimation.keyframes)
       ? savedAnimation.keyframes.map(frame=>({id:`area-${frame.id||Math.random()}`,time:clamp(num(frame.time,0),0,duration),x:num(frame.area?.x,state.area.x),y:num(frame.area?.y,state.area.y)}))
       : [];
-  state.animation={...fresh,name:savedAnimation.name||'motion',duration,loop:savedAnimation.loop!==false,currentTime:clamp(num(savedAnimation.currentTime,0),0,duration),tracks,areaKeys};
+  state.animation={...fresh,name:savedAnimation.name||'motion',duration,loop:savedAnimation.loop!==false,onionSkin:savedAnimation.onionSkin!==false,currentTime:clamp(num(savedAnimation.currentTime,0),0,duration),tracks,areaKeys};
 }
 function importCoordinateData(data) {
   if (!data || !Array.isArray(data.parts)) throw new Error('parts配列がありません');
@@ -1817,7 +1916,7 @@ function importCoordinateData(data) {
   stopTest();
   pushHistory();
 
-  if (Array.isArray(data.groups) && data.groups.length) { state.groups = data.groups.map(g=>({id:String(g.id||makeGroupId()),name:String(g.name||'グループ')})); }
+  if (Array.isArray(data.groups) && data.groups.length) { state.groups = data.groups.map(g=>({id:String(g.id||makeGroupId()),name:String(g.name||'グループ'),visible:g.visible!==false})); }
   else ensureGroups();
   state.activeGroupId = data.activeGroupId && state.groups.some(g=>g.id===data.activeGroupId) ? data.activeGroupId : state.groups[0].id;
   refreshGroupSelects();
@@ -1945,7 +2044,7 @@ $('#resetBtn').addEventListener('click', () => {
   stopTest(); pushHistory();
   state.stage = { width:390, height:844 };
   state.area = { x:12, y:18, width:160, height:220 };
-  state.parts = []; state.groups=[{id:'group-default',name:'未分類'}]; state.activeGroupId='group-default'; state.selectedId = null; state.groupMoveMode=false; state.pivotMode = false; state.ikMode = false; state.animation = freshAnimation(); refreshGroupSelects();
+  state.parts = []; state.groups=[{id:'group-default',name:'未分類',visible:true}]; state.activeGroupId='group-default'; state.selectedId = null; state.groupMoveMode=false; state.pivotMode = false; state.ikMode = false; state.animation = freshAnimation(); refreshGroupSelects();
   if (state.backgroundUrl) URL.revokeObjectURL(state.backgroundUrl);
   state.backgroundUrl = '';
   backgroundImage.hidden = true; backgroundImage.removeAttribute('src'); stageEmpty.hidden = false;
