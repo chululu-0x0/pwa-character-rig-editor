@@ -62,6 +62,10 @@ const trackRowsToggleBtn = $('#trackRowsToggleBtn');
 const onionSkinToggle = $('#onionSkinToggle');
 const onionPrevLayer = $('#onionPrevLayer');
 const onionNextLayer = $('#onionNextLayer');
+const boneLayer = $('#boneLayer');
+const toggleBoneBtn = $('#toggleBoneBtn');
+const deformMode = $('#deformMode');
+const deformAnchor = $('#deformAnchor');
 
 const state = {
   stage: { width: 390, height: 844 },
@@ -72,6 +76,7 @@ const state = {
   selectedId: null,
   groupMoveMode: false,
   pivotMode: false,
+  boneVisible: false,
   backgroundUrl: '',
   dragRaf: 0,
   testRaf: 0,
@@ -96,7 +101,7 @@ const inputs = {
   stageWidth: $('#stageWidth'), stageHeight: $('#stageHeight'),
   areaX: $('#areaX'), areaY: $('#areaY'), areaW: $('#areaW'), areaH: $('#areaH'),
   partX: $('#partX'), partY: $('#partY'), partW: $('#partW'), partRot: $('#partRot'),
-  pivotX: $('#pivotX'), pivotY: $('#pivotY'),
+  pivotX: $('#pivotX'), pivotY: $('#pivotY'), deformAmount: $('#deformAmount'),
   testAmplitude: $('#testAmplitude'), testDuration: $('#testDuration'),
   testChildScale: $('#testChildScale'), testDelay: $('#testDelay'),
   ikRootName: $('#ikRootName'), ikMidName: $('#ikMidName'), ikEndName: $('#ikEndName'), ikBendName: $('#ikBendName'),
@@ -264,7 +269,7 @@ function switchActiveGroup(groupId) {
   const members = partsInGroup(groupId);
   if (!selectedPart() || selectedPart().groupId !== groupId) state.selectedId = members[0]?.id || null;
   clearKeySelection(false);
-  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi(); renderTrackList(); renderOnionSkins();
+  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi(); renderTrackList(); renderOnionSkins(); renderBoneOverlay(state.animation.previewActive?state.animation.previewPose?.parts:null,null);
   markChanged(`グループ: ${groupById(groupId)?.name || ''}`);
 }
 function createGroupFromUi() {
@@ -519,9 +524,9 @@ function groupHasKeyAt(groupId,time,ignoreTime=null) {
 }
 function capturePartPose(part) {
   if (state.animation.previewActive && state.animation.previewPose) {
-    const pp = state.animation.previewPose.parts.get(part.id); if (pp) return { x:pp.x,y:pp.y,width:pp.width,rotation:pp.rotation };
+    const pp = state.animation.previewPose.parts.get(part.id); if (pp) return { x:pp.x,y:pp.y,width:pp.width,rotation:pp.rotation,deformAmount:num(pp.deformAmount,part.deformAmount||0) };
   }
-  return { x:part.x,y:part.y,width:part.width,rotation:part.rotation };
+  return { x:part.x,y:part.y,width:part.width,rotation:part.rotation,deformAmount:num(part.deformAmount,0) };
 }
 function interpolationPair(keys, time, loop, duration) {
   const sorted=[...(keys||[])].sort((a,b)=>a.time-b.time);
@@ -565,7 +570,7 @@ function interpolateKeyValues(keys, time, fallback) {
   if(pair.before) return {...fallback};
   const {a,b,t,aTime,bTime}=pair;
   const span=Math.max(0.0001,bTime-aTime), f=a===b?0:clamp((t-aTime)/span,0,1);
-  return { x:lerp(num(a.x,fallback.x),num(b.x,a.x),f), y:lerp(num(a.y,fallback.y),num(b.y,a.y),f), width:lerp(num(a.width,fallback.width),num(b.width,a.width),f), rotation:lerpAngle(num(a.rotation,fallback.rotation),num(b.rotation,a.rotation),f) };
+  return { x:lerp(num(a.x,fallback.x),num(b.x,a.x),f), y:lerp(num(a.y,fallback.y),num(b.y,a.y),f), width:lerp(num(a.width,fallback.width),num(b.width,a.width),f), rotation:lerpAngle(num(a.rotation,fallback.rotation),num(b.rotation,a.rotation),f), deformAmount:lerp(num(a.deformAmount,fallback.deformAmount||0),num(b.deformAmount,a.deformAmount??fallback.deformAmount??0),f) };
 }
 function interpolateAreaAt(time) {
   const fallback={x:state.area.x,y:state.area.y};
@@ -579,7 +584,7 @@ function interpolateAreaAt(time) {
 function interpolatedPoseAt(time) {
   if (!totalTrackKeyCount() && !(state.animation.areaKeys||[]).length) return null;
   const pose={area:interpolateAreaAt(time),parts:new Map()};
-  state.parts.forEach(part=>{ const fallback={x:part.x,y:part.y,width:part.width,rotation:part.rotation}; const track=trackForPart(part); pose.parts.set(part.id, interpolateKeyValues(track?.keys||[],time,fallback)); });
+  state.parts.forEach(part=>{ const fallback={x:part.x,y:part.y,width:part.width,rotation:part.rotation,deformAmount:num(part.deformAmount,0)}; const track=trackForPart(part); pose.parts.set(part.id, interpolateKeyValues(track?.keys||[],time,fallback)); });
   return pose;
 }
 function localMatrixFromPose(part, pose) {
@@ -591,9 +596,105 @@ function worldMatrixFromPose(part, poseMap, cache=new Map()) {
   const local=localMatrixFromPose(part,poseMap?.get(part.id)); const parent=part.parentId?partById(part.parentId):null;
   const result=parent?multiply(worldMatrixFromPose(parent,poseMap,cache),local):local; cache.set(part.id,result); return result;
 }
+
+const DEFORM_SLICES = 12;
+function ensureDeformStructure(node, part) {
+  const base = $('.part-base-image', node) || $('img', node);
+  let slices = $('.deform-slices', node);
+  if (!slices) {
+    slices = document.createElement('div');
+    slices.className = 'deform-slices';
+    slices.hidden = true;
+    node.insertBefore(slices, node.querySelector('.pivot-cross') || null);
+  }
+  return { base, slices };
+}
+function ensureSliceCount(container, part, orientation) {
+  const signature = `${orientation}|${part.objectUrl || ''}`;
+  if (container.dataset.signature === signature && container.children.length === DEFORM_SLICES) return;
+  container.replaceChildren();
+  container.dataset.signature = signature;
+  for (let i=0;i<DEFORM_SLICES;i++) {
+    const slice=document.createElement('div'); slice.className='deform-slice';
+    const img=document.createElement('img'); img.src=part.objectUrl || ''; img.alt=''; img.draggable=false;
+    slice.appendChild(img); container.appendChild(slice);
+  }
+}
+function applyDeformVisual(node, part, posePart=null) {
+  if (!node || !part) return;
+  const {base,slices}=ensureDeformStructure(node,part);
+  const width=Math.max(1,num(posePart?.width,part.width));
+  const ratio=(num(part.naturalWidth,1)>0)?num(part.naturalHeight,1)/num(part.naturalWidth,1):1;
+  const height=Math.max(1,width*ratio);
+  node.style.height=`${height}px`;
+  if (base) { base.src=part.objectUrl || base.src; base.style.display='block'; }
+  const mode=part.deformMode || 'none';
+  const amount=clamp(num(posePart?.deformAmount,part.deformAmount||0),-100,100);
+  const anchor=part.deformAnchor || 'top';
+  const active=mode==='bend' && Math.abs(amount)>.01 && !!part.objectUrl;
+  slices.hidden=!active;
+  if (!active) return;
+  if (base) base.style.display='none';
+  const horizontal = anchor==='top' || anchor==='bottom';
+  const orientation=horizontal?'h':'v';
+  ensureSliceCount(slices,part,orientation);
+  slices.style.width=`${width}px`; slices.style.height=`${height}px`;
+  const maxShift=(amount/100)*(horizontal?width:height)*0.35;
+  [...slices.children].forEach((slice,i)=>{
+    const img=slice.firstElementChild;
+    const center=(i+.5)/DEFORM_SLICES;
+    const t=(anchor==='bottom'||anchor==='right')?1-center:center;
+    const shift=maxShift*t*t;
+    if (horizontal) {
+      const top=i*height/DEFORM_SLICES, h=height/DEFORM_SLICES+1.2;
+      Object.assign(slice.style,{left:'0px',top:`${top}px`,width:`${width}px`,height:`${h}px`,transform:`translate3d(${shift}px,0,0)`});
+      Object.assign(img.style,{left:'0px',top:`${-top}px`,width:`${width}px`,height:`${height}px`});
+    } else {
+      const left=i*width/DEFORM_SLICES, w=width/DEFORM_SLICES+1.2;
+      Object.assign(slice.style,{left:`${left}px`,top:'0px',width:`${w}px`,height:`${height}px`,transform:`translate3d(0,${shift}px,0)`});
+      Object.assign(img.style,{left:`${-left}px`,top:'0px',width:`${width}px`,height:`${height}px`});
+    }
+  });
+}
+
+function bonePoint(part, poseMap=null, offsets=null, cache=new Map()) {
+  const m=poseMap ? worldMatrixFromPose(part,poseMap,cache) : worldMatrix(part,offsets,cache);
+  return transformPoint(m,part.pivotX,part.pivotY);
+}
+function renderBoneOverlay(poseMap=null, offsets=null) {
+  if (!boneLayer) return;
+  boneLayer.replaceChildren();
+  if (!state.boneVisible || !activeGroup() || activeGroup().visible===false) { boneLayer.hidden=true; return; }
+  boneLayer.hidden=false;
+  boneLayer.setAttribute('width',String(state.area.width));
+  boneLayer.setAttribute('height',String(state.area.height));
+  const members=partsInGroup(state.activeGroupId).filter(p=>p.visible);
+  const memberIds=new Set(members.map(p=>p.id));
+  const cache=new Map();
+  const ns='http://www.w3.org/2000/svg';
+  members.forEach(part=>{
+    const child=bonePoint(part,poseMap,offsets,cache);
+    const parent=part.parentId?partById(part.parentId):null;
+    if (parent && memberIds.has(parent.id)) {
+      const pp=bonePoint(parent,poseMap,offsets,cache);
+      const line=document.createElementNS(ns,'line');
+      line.setAttribute('x1',pp.x);line.setAttribute('y1',pp.y);line.setAttribute('x2',child.x);line.setAttribute('y2',child.y);line.setAttribute('class','bone-line');
+      boneLayer.appendChild(line);
+    }
+  });
+  members.forEach(part=>{
+    const p=bonePoint(part,poseMap,offsets,cache);
+    const c=document.createElementNS(ns,'circle');
+    c.setAttribute('cx',p.x);c.setAttribute('cy',p.y);c.setAttribute('r',part.id===state.selectedId?'7':'5');
+    c.setAttribute('class',`bone-joint${part.id===state.selectedId?' selected':''}`);
+    boneLayer.appendChild(c);
+  });
+}
+
 function applyPreviewPose(pose) {
   if(!pose)return; characterArea.style.left=`${pose.area.x}px`; characterArea.style.top=`${pose.area.y}px`; const cache=new Map();
-  state.parts.forEach(part=>{ const node=getPartNode(part.id); if(!node)return; const pp=pose.parts.get(part.id), m=worldMatrixFromPose(part,pose.parts,cache); node.style.width=`${pp?.width??part.width}px`; node.style.transformOrigin='0 0'; node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`; node.style.zIndex=String(effectiveZIndex(part)); node.classList.toggle('hidden-layer',!part.visible || !isGroupVisible(part.groupId)); });
+  state.parts.forEach(part=>{ const node=getPartNode(part.id); if(!node)return; const pp=pose.parts.get(part.id), m=worldMatrixFromPose(part,pose.parts,cache); node.style.width=`${pp?.width??part.width}px`; node.style.transformOrigin='0 0'; node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`; node.style.zIndex=String(effectiveZIndex(part)); node.classList.toggle('hidden-layer',!part.visible || !isGroupVisible(part.groupId)); applyDeformVisual(node,part,pp); });
+  renderBoneOverlay(pose.parts,null);
 }
 
 function clearOnionLayers() {
@@ -640,10 +741,13 @@ function renderOnionPose(layer, groupId, time) {
     node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
     node.style.zIndex=String(part.order||1);
     const img=document.createElement('img');
+    img.className='part-base-image';
     img.src=part.objectUrl;
     img.alt='';
     img.draggable=false;
-    node.appendChild(img);
+    const slices=document.createElement('div'); slices.className='deform-slices'; slices.hidden=true;
+    node.append(img,slices);
+    applyDeformVisual(node,part,pp);
     layer.appendChild(node);
   });
 }
@@ -671,7 +775,7 @@ function applyAnimationPreview(time,{renderTracks=false}={}) {
 }
 function commitAnimationPreview() {
   if(!state.animation.previewActive||!state.animation.previewPose)return false; const pose=state.animation.previewPose;
-  state.area.x=pose.area.x;state.area.y=pose.area.y; state.parts.forEach(part=>{const pp=pose.parts.get(part.id);if(!pp)return;part.x=pp.x;part.y=pp.y;part.width=pp.width;part.rotation=pp.rotation;});
+  state.area.x=pose.area.x;state.area.y=pose.area.y; state.parts.forEach(part=>{const pp=pose.parts.get(part.id);if(!pp)return;part.x=pp.x;part.y=pp.y;part.width=pp.width;part.rotation=pp.rotation;part.deformAmount=num(pp.deformAmount,part.deformAmount||0);});
   state.animation.previewActive=false;state.animation.previewPose=null;syncArea();applyAllPartStyles();syncInspector();return true;
 }
 function clearAnimationPreview({restore=true}={}) {state.animation.previewActive=false;state.animation.previewPose=null;if(restore){syncArea();applyAllPartStyles();syncInspector();}renderOnionSkins();}
@@ -716,7 +820,7 @@ function findDuplicateGroupTime(groupId,sourceTime){const occupied=new Set(group
 function duplicateSelectedKeyframe(){
   if(!hasSelectedGroupKey()){animStatus.textContent='複製するグループキーを選択';return;}
   const groupId=state.animation.selectedGroupId, source=Math.round(state.animation.selectedKeyTime), t=findDuplicateGroupTime(groupId,source);if(t==null){animStatus.textContent='空き時刻がありません';return;}
-  const pose=interpolatedPoseAt(source);pushHistory();partsInGroup(groupId).forEach(part=>{const pp=pose?.parts.get(part.id)||capturePartPose(part);writePartKey(part,t,{x:pp.x,y:pp.y,width:pp.width,rotation:pp.rotation},{replace:false});});selectGroupKey(groupId,t);markChanged(`${groupById(groupId)?.name||'グループ'} キー複製 ${source}→${t}ms`);
+  const pose=interpolatedPoseAt(source);pushHistory();partsInGroup(groupId).forEach(part=>{const pp=pose?.parts.get(part.id)||capturePartPose(part);writePartKey(part,t,{x:pp.x,y:pp.y,width:pp.width,rotation:pp.rotation,deformAmount:num(pp.deformAmount,part.deformAmount||0)},{replace:false});});selectGroupKey(groupId,t);markChanged(`${groupById(groupId)?.name||'グループ'} キー複製 ${source}→${t}ms`);
 }
 function deleteCurrentKeyframe(){
   if(!hasSelectedGroupKey()){animStatus.textContent='削除するグループキーを選択';return;}
@@ -806,6 +910,7 @@ function snapshot() {
     parts: state.parts.map(p => ({ ...p })),
     groups: state.groups.map(g => ({ ...g })),
     activeGroupId: state.activeGroupId,
+    boneVisible: !!state.boneVisible,
     selectedId: state.selectedId,
     animation: animationForSnapshot()
   };
@@ -819,6 +924,9 @@ function restoreSnapshot(snap) {
   state.parts = snap.parts.map(p => ({ ...p }));
   state.groups = (snap.groups || [{id:'group-default',name:'未分類'}]).map(g=>({...g}));
   state.activeGroupId = snap.activeGroupId || state.groups[0]?.id || 'group-default';
+  state.boneVisible = !!snap.boneVisible;
+  toggleBoneBtn?.classList.toggle('active',state.boneVisible);
+  if(toggleBoneBtn){toggleBoneBtn.textContent=state.boneVisible?'ボーン表示中':'ボーン表示';toggleBoneBtn.setAttribute('aria-pressed',state.boneVisible?'true':'false');}
   ensureGroups();
   refreshGroupSelects();
   applyAnimationSnapshot(snap.animation || freshAnimation());
@@ -870,6 +978,7 @@ function syncArea() {
   inputs.areaY.value = Math.round(state.area.y);
   inputs.areaW.value = Math.round(state.area.width);
   inputs.areaH.value = Math.round(state.area.height);
+  renderBoneOverlay(state.animation?.previewActive?state.animation.previewPose?.parts:null,null);
 }
 
 // ---------- rendering ----------
@@ -884,10 +993,12 @@ function applyPartStyle(part, node = getPartNode(part.id), offsets = null, cache
   const pivot = $('.pivot-cross', node);
   pivot.style.left = `${part.pivotX}px`;
   pivot.style.top = `${part.pivotY}px`;
+  applyDeformVisual(node,part,null);
 }
 function applyAllPartStyles(offsets = null) {
   const cache = new Map();
   state.parts.forEach(part => applyPartStyle(part, getPartNode(part.id), offsets, cache));
+  renderBoneOverlay(null,offsets);
 }
 function renderParts() {
   stopTest();
@@ -896,7 +1007,7 @@ function renderParts() {
   [...state.parts].sort((a,b) => a.order - b.order).forEach(part => {
     const node = partTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.id = part.id;
-    const img = $('img', node);
+    const img = $('.part-base-image', node);
     if (part.objectUrl) img.src = part.objectUrl;
     img.alt = part.name;
     characterArea.appendChild(node);
@@ -1037,7 +1148,8 @@ function syncInspector() {
   const disabled = !part;
   const locked = state.pivotMode || state.testRunning;
   ['partX','partY','partW','partRot'].forEach(key => inputs[key].disabled = disabled || locked);
-  ['pivotX','pivotY'].forEach(key => inputs[key].disabled = disabled || state.testRunning);
+  ['pivotX','pivotY','deformAmount'].forEach(key => inputs[key].disabled = disabled || state.testRunning);
+  deformMode.disabled = disabled || state.testRunning; deformAnchor.disabled = disabled || state.testRunning;
   parentSelect.disabled = disabled || locked;
   ['areaX','areaY','areaW','areaH'].forEach(key => inputs[key].disabled = state.pivotMode || state.testRunning);
   document.body.classList.toggle('pivot-mode', state.pivotMode);
@@ -1050,6 +1162,7 @@ function syncInspector() {
   if (!part) {
     selectedCoord.textContent = '未選択';
     selectedName.textContent = 'レイヤー / 親子ツリーから選択';
+    deformMode.value='none'; deformAnchor.value='top'; inputs.deformAmount.value='0';
     return;
   }
   const previewPart = state.animation.previewActive ? state.animation.previewPose?.parts?.get(part.id) : null;
@@ -1059,6 +1172,9 @@ function syncInspector() {
   inputs.partRot.value = Math.round(previewPart?.rotation ?? part.rotation);
   inputs.pivotX.value = Math.round(part.pivotX);
   inputs.pivotY.value = Math.round(part.pivotY);
+  deformMode.value = part.deformMode || 'none';
+  deformAnchor.value = part.deformAnchor || 'top';
+  inputs.deformAmount.value = Math.round(num(previewPart?.deformAmount,part.deformAmount||0));
   parentSelect.value = part.parentId || '';
   selectedCoord.textContent = `X ${Math.round(previewPart?.x ?? part.x)} / Y ${Math.round(previewPart?.y ?? part.y)}`;
   selectedName.textContent = part.name;
@@ -1069,7 +1185,7 @@ function selectPart(id) {
   if (hasSelectedGroupKey() && state.animation.selectedGroupId !== part.groupId) clearKeySelection(false);
   state.selectedId = id; state.activeGroupId = part.groupId || state.activeGroupId; refreshGroupSelects();
   if (state.ikMode && !currentIkChain()) state.ikMode = false;
-  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi(); syncKeyEditUi(); renderTrackList();
+  renderLayers(); renderHierarchy(); refreshParentSelect(); syncInspector(); refreshIkUi(); syncKeyEditUi(); renderTrackList(); renderBoneOverlay(state.animation.previewActive?state.animation.previewPose?.parts:null,null);
 }
 
 
@@ -1483,6 +1599,9 @@ partInput.addEventListener('change', async () => {
       y: 10,
       width: natural.width,
       rotation: 0,
+      deformMode: 'none',
+      deformAmount: 0,
+      deformAnchor: 'top',
       pivotX: Math.round(natural.width / 2),
       pivotY: Math.round(natural.height / 2),
       parentId: '',
@@ -1621,7 +1740,7 @@ function applyNumericInput(id) {
   const part = selectedPart();
   if (!part || state.testRunning) return;
   stopAnimation(true); commitAnimationPreview();
-  const map = { partX:'x', partY:'y', partW:'width', partRot:'rotation', pivotX:'pivotX', pivotY:'pivotY' };
+  const map = { partX:'x', partY:'y', partW:'width', partRot:'rotation', pivotX:'pivotX', pivotY:'pivotY', deformAmount:'deformAmount' };
   const key = map[id];
   if (!key) return;
   if (state.pivotMode && !['pivotX','pivotY'].includes(key)) return;
@@ -1629,9 +1748,29 @@ function applyNumericInput(id) {
   if (!['pivotX','pivotY'].includes(key)) markSelectedKeyPoseDirty();
   if (key === 'pivotX') setPivotPreservePose(part, v, part.pivotY);
   else if (key === 'pivotY') setPivotPreservePose(part, part.pivotX, v);
+  else if (key === 'deformAmount') part[key] = clamp(v,-100,100);
   else part[key] = key === 'width' ? Math.max(1, v) : v;
   applyAllPartStyles(); syncInspector(); markChanged();
 }
+
+
+// ---------- v19 bone + simple deformation controls ----------
+toggleBoneBtn?.addEventListener('click',()=>{
+  state.boneVisible=!state.boneVisible;
+  toggleBoneBtn.classList.toggle('active',state.boneVisible);
+  toggleBoneBtn.setAttribute('aria-pressed',state.boneVisible?'true':'false');
+  toggleBoneBtn.textContent=state.boneVisible?'ボーン表示中':'ボーン表示';
+  renderBoneOverlay(state.animation.previewActive?state.animation.previewPose?.parts:null,null);
+  markChanged(state.boneVisible?'ボーン表示ON':'ボーン表示OFF');
+});
+[deformMode,deformAnchor].forEach(control=>control?.addEventListener('change',()=>{
+  const part=selectedPart(); if(!part||state.testRunning)return;
+  stopAnimation(true); commitAnimationPreview(); pushHistory();
+  if(control===deformMode) part.deformMode=deformMode.value;
+  if(control===deformAnchor) part.deformAnchor=deformAnchor.value;
+  applyAllPartStyles(); syncInspector(); renderOnionSkins();
+  markChanged(control===deformMode?'簡易変形変更':'変形の根元変更');
+}));
 
 // ---------- draggable floating panels ----------
 [controlPanel, layerPanel, hierarchyPanel].forEach(makePanelDraggable);
@@ -1738,11 +1877,12 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 18,
+    version: 19,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     groups: state.groups.map(g => ({ id:g.id, name:g.name, visible:g.visible !== false })),
     activeGroupId: state.activeGroupId,
+    boneVisible: !!state.boneVisible,
     parts: [...state.parts].sort((a,b) => a.order - b.order).map(p => ({
       id: p.id,
       name: p.name,
@@ -1753,6 +1893,9 @@ function exportData() {
       naturalWidth: p.naturalWidth,
       naturalHeight: p.naturalHeight,
       rotation: Math.round(p.rotation),
+      deformMode: p.deformMode || 'none',
+      deformAmount: Math.round(num(p.deformAmount,0)*1000)/1000,
+      deformAnchor: p.deformAnchor || 'top',
       pivotX: Math.round(p.pivotX),
       pivotY: Math.round(p.pivotY),
       parentId: p.parentId,
@@ -1778,7 +1921,7 @@ function exportData() {
         name: track.name,
         keys: sortedTrackKeys(track).map(key => ({
           id:key.id, time:Math.round(key.time),
-          x:Math.round(key.x), y:Math.round(key.y), width:Math.round(key.width), rotation:Math.round(key.rotation*1000)/1000
+          x:Math.round(key.x), y:Math.round(key.y), width:Math.round(key.width), rotation:Math.round(key.rotation*1000)/1000, deformAmount:Math.round(num(key.deformAmount,0)*1000)/1000
         }))
       })),
       areaKeys: [...state.animation.areaKeys].sort((a,b)=>a.time-b.time).map(key => ({
@@ -1892,7 +2035,7 @@ function importAnimationData(savedAnimation, matches) {
     const track=tracks[current.id];
     const t=clamp(num(raw.time,0),0,duration);
     const existing=track.keys.find(k=>Math.abs(k.time-t)<=0.5);
-    const key={id:raw.id||`key-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:t,x:num(raw.x,current.x),y:num(raw.y,current.y),width:Math.max(1,num(raw.width,current.width)),rotation:num(raw.rotation,current.rotation)};
+    const key={id:raw.id||`key-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,time:t,x:num(raw.x,current.x),y:num(raw.y,current.y),width:Math.max(1,num(raw.width,current.width)),rotation:num(raw.rotation,current.rotation),deformAmount:num(raw.deformAmount,current.deformAmount||0)};
     if(existing)Object.assign(existing,key);else track.keys.push(key);
   };
 
@@ -1934,6 +2077,9 @@ function importCoordinateData(data) {
   if (Array.isArray(data.groups) && data.groups.length) { state.groups = data.groups.map(g=>({id:String(g.id||makeGroupId()),name:String(g.name||'グループ'),visible:g.visible!==false})); }
   else ensureGroups();
   state.activeGroupId = data.activeGroupId && state.groups.some(g=>g.id===data.activeGroupId) ? data.activeGroupId : state.groups[0].id;
+  state.boneVisible = !!data.boneVisible;
+  toggleBoneBtn?.classList.toggle('active',state.boneVisible);
+  if(toggleBoneBtn){toggleBoneBtn.textContent=state.boneVisible?'ボーン表示中':'ボーン表示';toggleBoneBtn.setAttribute('aria-pressed',state.boneVisible?'true':'false');}
   refreshGroupSelects();
 
   const unusedIds = new Set(state.parts.map(p => p.id));
@@ -1991,6 +2137,9 @@ function importCoordinateData(data) {
     current.y = num(saved.y, current.y);
     current.width = Math.max(1, num(saved.width, current.width));
     current.rotation = num(saved.rotation, current.rotation);
+    current.deformMode = saved.deformMode || current.deformMode || 'none';
+    current.deformAmount = num(saved.deformAmount,current.deformAmount||0);
+    current.deformAnchor = saved.deformAnchor || current.deformAnchor || 'top';
     current.pivotX = num(saved.pivotX, current.pivotX);
     current.pivotY = num(saved.pivotY, current.pivotY);
     current.visible = saved.visible !== false;
@@ -2059,13 +2208,14 @@ $('#resetBtn').addEventListener('click', () => {
   stopTest(); pushHistory();
   state.stage = { width:390, height:844 };
   state.area = { x:12, y:18, width:160, height:220 };
-  state.parts = []; state.groups=[{id:'group-default',name:'未分類',visible:true}]; state.activeGroupId='group-default'; state.selectedId = null; state.groupMoveMode=false; state.pivotMode = false; state.ikMode = false; state.animation = freshAnimation(); refreshGroupSelects();
+  state.parts = []; state.groups=[{id:'group-default',name:'未分類',visible:true}]; state.activeGroupId='group-default'; state.selectedId = null; state.groupMoveMode=false; state.pivotMode = false; state.ikMode = false; state.boneVisible=false; state.animation = freshAnimation(); refreshGroupSelects();
   if (state.backgroundUrl) URL.revokeObjectURL(state.backgroundUrl);
   state.backgroundUrl = '';
   backgroundImage.hidden = true; backgroundImage.removeAttribute('src'); stageEmpty.hidden = false;
   jsonPreview.value = '';
   $('#togglePivotBtn').classList.remove('active'); $('#togglePivotBtn').textContent = 'ピボット設定';
   toggleIkBtn.classList.remove('active'); toggleIkBtn.textContent = 'IKモード';
+  toggleBoneBtn?.classList.remove('active'); if(toggleBoneBtn){toggleBoneBtn.textContent='ボーン表示';toggleBoneBtn.setAttribute('aria-pressed','false');}
   syncStage(); syncArea(); renderParts(); syncAnimationUi(); markChanged('初期化済み');
 });
 $('#fitBtn').addEventListener('click', () => {
