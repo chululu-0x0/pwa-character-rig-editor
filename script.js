@@ -42,6 +42,8 @@ const ikTarget = $('#ikTarget');
 const toggleIkBtn = $('#toggleIkBtn');
 const ikStatus = $('#ikStatus');
 const animationPanel = $('#animationPanel');
+const appHeader = $('.app-header');
+const appShell = $('.app-shell');
 const timelineSlider = $('#timelineSlider');
 const trackList = $('#trackList');
 const trackViewport = $('#trackViewport');
@@ -738,7 +740,14 @@ function renderTrackList(){
   });
 }
 function totalGroupKeyCount(){return state.groups.reduce((n,g)=>n+groupKeyTimes(g.id).length,0);}
-function syncAnimationUi(){motionName.value=state.animation.name;inputs.animDuration.value=Math.round(state.animation.duration);animLoop.checked=!!state.animation.loop;syncTimelineReadout();animStatus.textContent=`${totalGroupKeyCount()} group key / ${state.groups.filter(g=>groupKeyTimes(g.id).length).length} group`;syncKeyEditUi();renderTrackList();timelineBody.hidden=!!state.animation.timelineCollapsed;timelineCollapseBtn.textContent=state.animation.timelineCollapsed?'+':'−';trackViewport.hidden=!!state.animation.tracksHidden;trackRowsToggleBtn.textContent=state.animation.tracksHidden?'トラックを表示':'トラックを隠す';if(onionSkinToggle)onionSkinToggle.checked=state.animation.onionSkin!==false;renderOnionSkins();}
+
+function updateChromeMetrics(){
+  const headerH=Math.ceil(appHeader?.getBoundingClientRect().height||0);
+  const timelineH=Math.ceil(animationPanel?.getBoundingClientRect().height||0);
+  document.documentElement.style.setProperty('--editor-header-h',`${headerH}px`);
+  document.documentElement.style.setProperty('--editor-timeline-h',`${timelineH}px`);
+}
+function syncAnimationUi(){motionName.value=state.animation.name;inputs.animDuration.value=Math.round(state.animation.duration);animLoop.checked=!!state.animation.loop;syncTimelineReadout();animStatus.textContent=`${totalGroupKeyCount()} group key / ${state.groups.filter(g=>groupKeyTimes(g.id).length).length} group`;syncKeyEditUi();renderTrackList();timelineBody.hidden=!!state.animation.timelineCollapsed;timelineCollapseBtn.textContent=state.animation.timelineCollapsed?'+':'−';trackViewport.hidden=!!state.animation.tracksHidden;trackRowsToggleBtn.textContent=state.animation.tracksHidden?'トラックを表示':'トラックを隠す';if(onionSkinToggle)onionSkinToggle.checked=state.animation.onionSkin!==false;renderOnionSkins();requestAnimationFrame(updateChromeMetrics);}
 function setAnimationTime(time,preview=true){stopAnimation(true);const t=clamp(num(time,0),0,state.animation.duration);if(preview)applyAnimationPreview(t,{renderTracks:true});else{state.animation.currentTime=t;syncTimelineReadout();renderTrackList();}}
 function jumpKey(direction){
   let groupId=state.animation.selectedGroupId||state.activeGroupId;let items=groupKeyTimes(groupId).map(time=>({groupId,time}));
@@ -755,6 +764,12 @@ timelineSlider.addEventListener('input',()=>{stopAnimation(true);clearKeySelecti
 $('#addKeyBtn').addEventListener('click',addNewKeyframe);overwriteKeyBtn.addEventListener('click',overwriteSelectedKeyframe);duplicateKeyBtn.addEventListener('click',duplicateSelectedKeyframe);deleteKeyBtn.addEventListener('click',deleteCurrentKeyframe);$('#prevKeyBtn').addEventListener('click',()=>jumpKey(-1));$('#nextKeyBtn').addEventListener('click',()=>jumpKey(1));$('#playAnimBtn').addEventListener('click',startAnimation);$('#stopAnimBtn').addEventListener('click',()=>stopAnimation(true));
 timelineCollapseBtn.addEventListener('click',e=>{e.stopPropagation();state.animation.timelineCollapsed=!state.animation.timelineCollapsed;syncAnimationUi();});
 trackRowsToggleBtn.addEventListener('click',()=>{state.animation.tracksHidden=!state.animation.tracksHidden;syncAnimationUi();});
+
+trackViewport.addEventListener('wheel',e=>{e.stopPropagation();},{passive:true});
+trackViewport.addEventListener('pointerdown',e=>{e.stopPropagation();});
+trackViewport.addEventListener('touchstart',e=>{e.stopPropagation();},{passive:true});
+trackViewport.addEventListener('touchmove',e=>{e.stopPropagation();},{passive:true});
+
 onionSkinToggle?.addEventListener('change',()=>{state.animation.onionSkin=onionSkinToggle.checked;renderOnionSkins();markChanged(state.animation.onionSkin?'オニオンスキンON':'オニオンスキンOFF');});
 
 
@@ -1723,7 +1738,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 17,
+    version: 18,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     groups: state.groups.map(g => ({ id:g.id, name:g.name, visible:g.visible !== false })),
@@ -2079,3 +2094,6 @@ document.addEventListener('dragstart', event => event.preventDefault());
 document.addEventListener('dblclick', event => event.preventDefault(), { passive: false });
 
 syncStage(); syncArea(); renderParts(); syncAnimationUi(); updateHistoryButtons();
+
+window.addEventListener('resize',updateChromeMetrics);
+requestAnimationFrame(updateChromeMetrics);
