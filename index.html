@@ -10,7 +10,7 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>キャラクター配置エディタ <span class="version">v12</span></h1>
+      <h1>キャラクター配置エディタ <span class="version">v13</span></h1>
     </div>
     <div class="header-actions">
       <button id="undoBtn" type="button" title="一つ前に戻る">↶ 戻る</button>
@@ -91,29 +91,16 @@
         <button id="deletePartBtn" class="danger-link" type="button">選択パーツを削除</button>
       </section>
 
-      <section class="card test-card">
-        <div class="card-title-row">
-          <h2>試運転</h2>
-          <span id="testStatus" class="status">停止中</span>
-        </div>
-        <p class="hint">保存値は変更しません。「親子チェーン」では子関節も時間差で揺らします。</p>
-        <label>モード
-          <select id="testMode">
-            <option value="single">選択関節</option>
-            <option value="chain">親子チェーン</option>
-          </select>
-        </label>
-        <div class="grid-2 test-grid">
-          <label>振れ幅 <input id="testAmplitude" class="numeric-input" readonly inputmode="none" value="15" />°</label>
-          <label>1往復 <input id="testDuration" class="numeric-input" readonly inputmode="none" value="1200" />ms</label>
-          <label>子の振れ率 <input id="testChildScale" class="numeric-input" readonly inputmode="none" value="70" />%</label>
-          <label>時間差 <input id="testDelay" class="numeric-input" readonly inputmode="none" value="100" />ms</label>
-        </div>
-        <div class="button-row">
-          <button id="startTestBtn" type="button">再生</button>
-          <button id="stopTestBtn" type="button">停止</button>
-        </div>
-      </section>
+      <div class="test-hidden-defaults" hidden>
+        <span id="testStatus">停止中</span>
+        <select id="testMode"><option value="single" selected>選択関節</option><option value="chain">親子チェーン</option></select>
+        <input id="testAmplitude" class="numeric-input" value="15" />
+        <input id="testDuration" class="numeric-input" value="1200" />
+        <input id="testChildScale" class="numeric-input" value="70" />
+        <input id="testDelay" class="numeric-input" value="100" />
+        <button id="startTestBtn" type="button">再生</button>
+        <button id="stopTestBtn" type="button">停止</button>
+      </div>
 
       <section class="card ik-card">
         <div class="card-title-row">
@@ -138,7 +125,7 @@
           <h2>座標データ</h2>
           <span class="status" id="statusText">未出力</span>
         </div>
-        <p class="hint">画像は含めません。v12ではグループ情報・配置・親子関係・アニメーションを保存します。読み込み時は同名パーツへ復元します。</p>
+        <p class="hint">画像は含めません。v13ではグループ情報・グループ描画順・配置・親子関係・アニメーションを保存します。読み込み時は同名パーツへ復元します。</p>
         <div class="button-stack">
           <button id="copyJsonBtn" type="button">座標JSONをコピー</button>
           <button id="downloadJsonBtn" type="button">保存先を選んでJSON保存</button>
@@ -176,6 +163,8 @@
     <div class="panel-drag-handle">描画レイヤー <span>グループ別</span></div>
     <div class="group-switch-row">
       <select id="layerGroupSelect" aria-label="表示グループ"></select>
+      <button id="groupBackBtn" type="button" title="グループを奥へ">↓奥</button>
+      <button id="groupFrontBtn" type="button" title="グループを手前へ">↑前</button>
       <button id="layerNewGroupBtn" type="button" title="グループ作成">＋</button>
     </div>
     <div id="layerList" class="layer-list">
@@ -201,7 +190,11 @@
 <section id="animationPanel" class="floating-panel timeline-panel" data-panel="timeline">
   <div class="panel-drag-handle timeline-handle">
     <span>アニメーション / タイムライン <small>グループ別トラック</small></span>
-    <button id="timelineCollapseBtn" class="panel-mini-button" type="button" title="タイムラインを折りたたむ">−</button>
+    <div class="timeline-handle-actions">
+      <button id="playAnimBtn" class="timeline-mini-transport-btn" type="button">▶ 再生</button>
+      <button id="stopAnimBtn" class="timeline-mini-transport-btn" type="button">■ 停止</button>
+      <button id="timelineCollapseBtn" class="panel-mini-button" type="button" title="タイムラインを折りたたむ">−</button>
+    </div>
   </div>
   <div id="timelineBody" class="timeline-body">
     <div class="timeline-topbar">
@@ -220,8 +213,6 @@
 
     <div class="timeline-transport compact-transport">
       <button id="prevKeyBtn" type="button" title="前のキー">|◀</button>
-      <button id="playAnimBtn" type="button">▶ 再生</button>
-      <button id="stopAnimBtn" type="button">■ 停止</button>
       <button id="nextKeyBtn" type="button" title="次のキー">▶|</button>
       <button id="addKeyBtn" class="primary-button" type="button">グループキー登録</button>
       <button id="duplicateKeyBtn" type="button">複製</button>

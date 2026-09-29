@@ -15,6 +15,8 @@ const parentSelect = $('#parentSelect');
 const layerList = $('#layerList');
 const layerGroupSelect = $('#layerGroupSelect');
 const layerNewGroupBtn = $('#layerNewGroupBtn');
+const groupBackBtn = $('#groupBackBtn');
+const groupFrontBtn = $('#groupFrontBtn');
 const hierarchyTree = $('#hierarchyTree');
 const controlPanel = $('#controlPanel');
 const layerPanel = $('#layerPanel');
@@ -197,6 +199,25 @@ function ensureGroups() {
 function groupById(id) { ensureGroups(); return state.groups.find(g => g.id === id) || null; }
 function activeGroup() { return groupById(state.activeGroupId); }
 function partsInGroup(groupId) { return state.parts.filter(p => p.groupId === groupId).sort((a,b)=>a.order-b.order); }
+function groupIndex(groupId) { ensureGroups(); return Math.max(0, state.groups.findIndex(g => g.id === groupId)); }
+function effectiveZIndex(part) { return (groupIndex(part.groupId) + 1) * 10000 + (part.order || 1); }
+function syncGroupLayerButtons() {
+  const i = groupIndex(state.activeGroupId);
+  if (groupBackBtn) groupBackBtn.disabled = i <= 0;
+  if (groupFrontBtn) groupFrontBtn.disabled = i < 0 || i >= state.groups.length - 1;
+}
+function moveActiveGroupLayer(direction) {
+  ensureGroups();
+  const i = groupIndex(state.activeGroupId), j = i + direction;
+  if (i < 0 || j < 0 || j >= state.groups.length) return;
+  pushHistory();
+  [state.groups[i], state.groups[j]] = [state.groups[j], state.groups[i]];
+  refreshGroupSelects();
+  applyAllPartStyles();
+  renderLayers();
+  renderTrackList();
+  markChanged(direction > 0 ? 'グループを手前へ' : 'グループを奥へ');
+}
 function refreshGroupSelects() {
   ensureGroups();
   [partGroupSelect, layerGroupSelect].forEach(select => {
@@ -209,6 +230,7 @@ function refreshGroupSelects() {
     select.value = state.groups.some(g=>g.id===previous) ? previous : state.activeGroupId;
   });
   if (layerGroupSelect) layerGroupSelect.value = state.activeGroupId;
+  syncGroupLayerButtons();
 }
 function switchActiveGroup(groupId) {
   ensureGroups();
@@ -307,7 +329,7 @@ function worldMatrixFromPose(part, poseMap, cache=new Map()) {
 }
 function applyPreviewPose(pose) {
   if(!pose)return; characterArea.style.left=`${pose.area.x}px`; characterArea.style.top=`${pose.area.y}px`; const cache=new Map();
-  state.parts.forEach(part=>{ const node=getPartNode(part.id); if(!node)return; const pp=pose.parts.get(part.id), m=worldMatrixFromPose(part,pose.parts,cache); node.style.width=`${pp?.width??part.width}px`; node.style.transformOrigin='0 0'; node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`; node.style.zIndex=String(part.order||1); node.classList.toggle('hidden-layer',!part.visible); });
+  state.parts.forEach(part=>{ const node=getPartNode(part.id); if(!node)return; const pp=pose.parts.get(part.id), m=worldMatrixFromPose(part,pose.parts,cache); node.style.width=`${pp?.width??part.width}px`; node.style.transformOrigin='0 0'; node.style.transform=`matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`; node.style.zIndex=String(effectiveZIndex(part)); node.classList.toggle('hidden-layer',!part.visible); });
 }
 function applyAnimationPreview(time,{renderTracks=false}={}) {
   const pose=interpolatedPoseAt(time); state.animation.currentTime=clamp(time,0,state.animation.duration); syncTimelineReadout();
@@ -336,7 +358,7 @@ function syncKeyEditUi(){
   selectedKeyLabel.textContent=`${group?.name||'グループ'} ${original}ms`;
   if(state.animation.keyDirty){keyEditStatus.textContent=`未確定 → ${draft}ms`;keyEditStatus.classList.add('dirty');} else {keyEditStatus.textContent='登録内容と同じ';keyEditStatus.classList.remove('dirty');}
 }
-function setSelectedKeyDraftTime(time){if(!hasSelectedGroupKey())return;const original=state.animation.selectedKeyTime;const t=Math.round(clamp(num(time,original),0,state.animation.duration));state.animation.keyDraftTime=t;state.animation.currentTime=t;state.animation.keyDirty=t!==Math.round(original)||state.animation.keyDirty;syncTimelineReadout();syncKeyEditUi();renderTrackList();}
+function setSelectedKeyDraftTime(time,{render=true}={}){if(!hasSelectedGroupKey())return;const original=state.animation.selectedKeyTime;const t=Math.round(clamp(num(time,original),0,state.animation.duration));state.animation.keyDraftTime=t;state.animation.currentTime=t;state.animation.keyDirty=t!==Math.round(original)||state.animation.keyDirty;syncTimelineReadout();syncKeyEditUi();if(render)renderTrackList();}
 function writePartKey(part,time,pose,{replace=true}={}) {
   const track=ensureTrack(part); const existing=track.keys.find(k=>Math.abs(k.time-time)<=1);
   if(existing && replace) Object.assign(existing,{time,...pose});
@@ -378,7 +400,7 @@ function renderTrackList(){
     groupKeyTimes(group.id).forEach(time=>{
       const selected=state.animation.selectedGroupId===group.id&&Math.abs(state.animation.selectedKeyTime-time)<=1;const displayTime=selected&&state.animation.keyDraftTime!=null?state.animation.keyDraftTime:time;
       const marker=document.createElement('button');marker.type='button';marker.className=`track-key${selected?' selected':''}${selected&&state.animation.keyDirty?' draft':''}`;marker.style.left=`${clamp(displayTime/duration,0,1)*100}%`;marker.title=`${group.name} ${Math.round(displayTime)}ms`;
-      marker.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();stopAnimation(true);if(!selected)selectGroupKey(group.id,time);let dragged=false;const sx=e.clientX;marker.setPointerCapture?.(e.pointerId);const move=ev=>{if(Math.abs(ev.clientX-sx)>2)dragged=true;if(!dragged)return;const rect=lane.getBoundingClientRect();const ratio=rect.width?clamp((ev.clientX-rect.left)/rect.width,0,1):0;setSelectedKeyDraftTime(Math.round(ratio*state.animation.duration));};const up=()=>{marker.removeEventListener('pointermove',move);marker.removeEventListener('pointerup',up);marker.removeEventListener('pointercancel',up);renderTrackList();};marker.addEventListener('pointermove',move);marker.addEventListener('pointerup',up);marker.addEventListener('pointercancel',up);});
+      marker.addEventListener('pointerdown',e=>{e.preventDefault();e.stopPropagation();stopAnimation(true);if(!selected)selectGroupKey(group.id,time);let dragged=false;const sx=e.clientX;marker.setPointerCapture?.(e.pointerId);const move=ev=>{if(Math.abs(ev.clientX-sx)>2)dragged=true;if(!dragged)return;const rect=lane.getBoundingClientRect();const ratio=rect.width?clamp((ev.clientX-rect.left)/rect.width,0,1):0;const draft=Math.round(ratio*state.animation.duration);setSelectedKeyDraftTime(draft,{render:false});marker.style.left=`${clamp(draft/state.animation.duration,0,1)*100}%`;marker.title=`${group.name} ${draft}ms`;};const up=()=>{marker.removeEventListener('pointermove',move);marker.removeEventListener('pointerup',up);marker.removeEventListener('pointercancel',up);renderTrackList();};marker.addEventListener('pointermove',move);marker.addEventListener('pointerup',up);marker.addEventListener('pointercancel',up);});
       lane.appendChild(marker);
     });
     row.append(label,lane);trackList.appendChild(row);
@@ -407,6 +429,8 @@ partGroupSelect.addEventListener('change',()=>switchActiveGroup(partGroupSelect.
 layerGroupSelect.addEventListener('change',()=>switchActiveGroup(layerGroupSelect.value));
 newGroupBtn.addEventListener('click',createGroupFromUi);
 layerNewGroupBtn.addEventListener('click',createGroupFromUi);
+groupBackBtn?.addEventListener('click',()=>moveActiveGroupLayer(-1));
+groupFrontBtn?.addEventListener('click',()=>moveActiveGroupLayer(1));
 
 // ---------- history ----------
 function snapshot() {
@@ -488,7 +512,7 @@ function applyPartStyle(part, node = getPartNode(part.id), offsets = null, cache
   node.style.width = `${part.width}px`;
   node.style.transformOrigin = '0 0';
   node.style.transform = `matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
-  node.style.zIndex = String(part.order || 1);
+  node.style.zIndex = String(effectiveZIndex(part));
   node.classList.toggle('hidden-layer', !part.visible);
   const pivot = $('.pivot-cross', node);
   pivot.style.left = `${part.pivotX}px`;
@@ -679,6 +703,12 @@ function refreshIkUi() {
   inputs.ikMidName.value = chain?.lower?.name || '-';
   inputs.ikEndName.value = chain?.end?.name || '-';
   inputs.ikBendName.value = state.ikBendDir > 0 ? '通常' : '反転';
+  if (controlFlipIkBtn) {
+    const reversed = state.ikBendDir < 0;
+    controlFlipIkBtn.classList.toggle('reversed', reversed);
+    controlFlipIkBtn.setAttribute('aria-pressed', reversed ? 'true' : 'false');
+    const label = $('span', controlFlipIkBtn); if (label) label.textContent = reversed ? 'IK反転中' : 'IK反転';
+  }
   const active = state.ikMode && !!chain;
   toggleIkBtn.classList.toggle('active', active);
   toggleIkBtn.textContent = active ? 'IKモード中' : 'IKモード';
@@ -1193,7 +1223,7 @@ function applyNumericInput(id) {
 }
 
 // ---------- draggable floating panels ----------
-[controlPanel, layerPanel, hierarchyPanel, animationPanel].forEach(makePanelDraggable);
+[controlPanel, layerPanel, hierarchyPanel].forEach(makePanelDraggable);
 function makePanelDraggable(panel) {
   const handle = $('.panel-drag-handle', panel);
   const saved = loadPanelPosition(panel.dataset.panel);
@@ -1297,7 +1327,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 12,
+    version: 13,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     groups: state.groups.map(g => ({ id:g.id, name:g.name })),
@@ -1597,7 +1627,7 @@ $('#fitBtn').addEventListener('click', () => {
   wrap.scrollTo({ left:Math.max(0,(stage.offsetWidth-wrap.clientWidth)/2), top:0, behavior:'smooth' });
 });
 window.addEventListener('resize', () => {
-  [controlPanel, layerPanel, hierarchyPanel, animationPanel].forEach(panel => {
+  [controlPanel, layerPanel, hierarchyPanel].forEach(panel => {
     const r = panel.getBoundingClientRect();
     if (r.right > innerWidth) panel.style.left = `${Math.max(0, innerWidth - panel.offsetWidth)}px`;
     if (r.bottom > innerHeight) panel.style.top = `${Math.max(0, innerHeight - panel.offsetHeight)}px`;
