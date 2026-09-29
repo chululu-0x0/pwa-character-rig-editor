@@ -10,7 +10,7 @@
   <header class="app-header">
     <div>
       <p class="eyebrow">PWA Character Rig Editor</p>
-      <h1>キャラクター配置エディタ <span class="version">v19</span></h1>
+      <h1>キャラクター配置エディタ <span class="version">v20</span></h1>
     </div>
     <div class="header-actions">
       <button id="undoBtn" type="button" title="一つ前に戻る">↶ 戻る</button>
@@ -95,7 +95,8 @@
           <label>簡易変形
             <select id="deformMode">
               <option value="none">なし</option>
-              <option value="bend">しなり</option>
+              <option value="bend">しなり（帯分割）</option>
+              <option value="stretch">伸縮（高画質）</option>
             </select>
           </label>
           <label>根元
@@ -106,9 +107,9 @@
               <option value="right">右固定</option>
             </select>
           </label>
-          <label>しなり量 <input id="deformAmount" class="numeric-input" readonly inputmode="none" value="0" /> %</label>
+          <label>変形量 <input id="deformAmount" class="numeric-input" readonly inputmode="none" value="0" /> %</label>
         </div>
-        <p class="hint deform-hint">髪・リボン・裾など向け。根元側を固定し、先端ほど少しずつずらす簡易変形です。</p>
+        <p class="hint deform-hint">しなりは帯分割で柔らかく曲げます。伸縮は画像を分割せず、選んだ上下左右の辺を固定して反対側を伸ばす／縮めるため画質が荒れにくい方式です。</p>
         <p id="pivotModeHint" class="hint">ピボット設定中は画像位置を固定したまま、十字だけを移動できます。</p>
         <button id="deletePartBtn" class="danger-link" type="button">選択パーツを削除</button>
       </section>
@@ -259,6 +260,21 @@
         <input id="selectedKeyTime" class="numeric-input compact-number" readonly inputmode="none" value="0" disabled /> ms
       </label>
       <span id="keyEditStatus" class="key-edit-status">トラック上の◆を選択</span>
+    </div>
+
+
+    <div class="range-copy-row">
+      <span class="range-title">範囲コピー</span>
+      <label>開始 <input id="rangeStart" class="numeric-input compact-number" readonly inputmode="none" value="0" /> ms</label>
+      <span>〜</span>
+      <label>終了 <input id="rangeEnd" class="numeric-input compact-number" readonly inputmode="none" value="500" /> ms</label>
+      <select id="rangeScope" title="コピー対象">
+        <option value="group">選択グループ</option>
+        <option value="all">全グループ</option>
+      </select>
+      <button id="copyRangeBtn" type="button">範囲コピー</button>
+      <button id="pasteRangeBtn" type="button" disabled>現在msへ貼付</button>
+      <span id="rangeBufferStatus" class="range-buffer-status">未コピー</span>
     </div>
 
     <div class="timeline-ruler compact-ruler" id="timelineRuler">

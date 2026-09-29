@@ -990,3 +990,30 @@ body {
   pointer-events: none;
   user-select: none;
 }
+
+
+/* v20: range copy tools + high quality edge-anchored stretch */
+.range-copy-row {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:4px 6px;
+  padding:3px 8px;
+  border-top:1px solid rgba(215,206,197,.7);
+  border-bottom:1px solid rgba(215,206,197,.7);
+  background:rgba(250,247,243,.9);
+  flex:0 0 auto;
+}
+.range-copy-row .range-title { font-weight:700; color:#6d625b; margin-right:2px; }
+.range-copy-row label { display:flex; align-items:center; gap:3px; white-space:nowrap; }
+.range-copy-row .compact-number { width:52px; min-width:52px; padding:3px 5px; }
+.range-copy-row select { min-width:86px; padding:3px 5px; }
+.range-copy-row button { padding:4px 7px; white-space:nowrap; }
+.range-buffer-status { color:#8b7d73; white-space:nowrap; }
+.range-buffer-status.ready { color:var(--accent); font-weight:700; }
+
+/* Stretch mode transforms the single source image instead of sliced copies. */
+.rig-part > .part-base-image,
+.onion-part > .part-base-image {
+  will-change: transform;
+}
