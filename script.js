@@ -508,18 +508,58 @@ function capturePartPose(part) {
   }
   return { x:part.x,y:part.y,width:part.width,rotation:part.rotation };
 }
+function interpolationPair(keys, time, loop, duration) {
+  const sorted=[...(keys||[])].sort((a,b)=>a.time-b.time);
+  if (!sorted.length) return null;
+  if (sorted.length === 1) return { a:sorted[0], b:sorted[0], t:sorted[0].time, aTime:sorted[0].time, bTime:sorted[0].time };
+
+  const d=Math.max(1,num(duration,1));
+  const t=clamp(num(time,0),0,d);
+  const first=sorted[0], last=sorted[sorted.length-1];
+
+  // Exact keys should always win, including 0ms and duration-ms keys.
+  const exact=sorted.find(k=>Math.abs(num(k.time,0)-t)<0.0001);
+  if (exact) return { a:exact,b:exact,t,aTime:t,bTime:t };
+
+  // Normal segment inside the recorded key range.
+  for(let i=0;i<sorted.length-1;i++) {
+    const a=sorted[i], b=sorted[i+1];
+    if(t>a.time && t<b.time) return { a,b,t,aTime:a.time,bTime:b.time };
+  }
+
+  if (!loop) {
+    if (t<first.time) return { before:true, first };
+    return { a:last,b:last,t,aTime:last.time,bTime:last.time };
+  }
+
+  // Loop segment: last key -> virtual copy of first key in the next cycle.
+  // If the playhead is before the first key, view it as time+duration so the
+  // same continuous segment spans the timeline boundary.
+  const wrappedT = t < first.time ? t + d : t;
+  return {
+    a:last,
+    b:first,
+    t:wrappedT,
+    aTime:last.time,
+    bTime:first.time + d
+  };
+}
 function interpolateKeyValues(keys, time, fallback) {
-  const sorted=[...(keys||[])].sort((a,b)=>a.time-b.time); if (!sorted.length) return {...fallback};
-  const t=clamp(time,0,state.animation.duration); let a=sorted[0], b=sorted[sorted.length-1];
-  if (t<a.time) return {...fallback}; if (t===a.time) b=a; else if (t>=b.time) a=b; else { for(let i=0;i<sorted.length-1;i++) if(t>=sorted[i].time && t<=sorted[i+1].time){a=sorted[i];b=sorted[i+1];break;} }
-  const span=Math.max(1,b.time-a.time), f=a===b?0:clamp((t-a.time)/span,0,1);
+  const pair=interpolationPair(keys,time,!!state.animation.loop,state.animation.duration);
+  if(!pair) return {...fallback};
+  if(pair.before) return {...fallback};
+  const {a,b,t,aTime,bTime}=pair;
+  const span=Math.max(0.0001,bTime-aTime), f=a===b?0:clamp((t-aTime)/span,0,1);
   return { x:lerp(num(a.x,fallback.x),num(b.x,a.x),f), y:lerp(num(a.y,fallback.y),num(b.y,a.y),f), width:lerp(num(a.width,fallback.width),num(b.width,a.width),f), rotation:lerpAngle(num(a.rotation,fallback.rotation),num(b.rotation,a.rotation),f) };
 }
 function interpolateAreaAt(time) {
-  const keys=[...(state.animation.areaKeys||[])].sort((a,b)=>a.time-b.time); if(!keys.length) return {x:state.area.x,y:state.area.y};
-  const t=clamp(time,0,state.animation.duration); let a=keys[0], b=keys[keys.length-1];
-  if(t<a.time)return {x:state.area.x,y:state.area.y}; if(t===a.time)b=a; else if(t>=b.time)a=b; else { for(let i=0;i<keys.length-1;i++) if(t>=keys[i].time&&t<=keys[i+1].time){a=keys[i];b=keys[i+1];break;} }
-  const span=Math.max(1,b.time-a.time), f=a===b?0:clamp((t-a.time)/span,0,1); return {x:lerp(a.x,b.x,f),y:lerp(a.y,b.y,f)};
+  const fallback={x:state.area.x,y:state.area.y};
+  const pair=interpolationPair(state.animation.areaKeys||[],time,!!state.animation.loop,state.animation.duration);
+  if(!pair) return fallback;
+  if(pair.before) return fallback;
+  const {a,b,t,aTime,bTime}=pair;
+  const span=Math.max(0.0001,bTime-aTime), f=a===b?0:clamp((t-aTime)/span,0,1);
+  return {x:lerp(num(a.x,fallback.x),num(b.x,a.x),f),y:lerp(num(a.y,fallback.y),num(b.y,a.y),f)};
 }
 function interpolatedPoseAt(time) {
   if (!totalTrackKeyCount() && !(state.animation.areaKeys||[]).length) return null;
@@ -1585,7 +1625,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 15,
+    version: 16,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     groups: state.groups.map(g => ({ id:g.id, name:g.name })),
