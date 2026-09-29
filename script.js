@@ -19,6 +19,9 @@ const groupBackBtn = $('#groupBackBtn');
 const groupFrontBtn = $('#groupFrontBtn');
 const renameGroupBtn = $('#renameGroupBtn');
 const duplicateGroupBtn = $('#duplicateGroupBtn');
+const shiftGroupTimeBtn = $('#shiftGroupTimeBtn');
+const groupMoveBtn = $('#groupMoveBtn');
+const deleteGroupBtn = $('#deleteGroupBtn');
 const hierarchyGroupName = $('#hierarchyGroupName');
 const hierarchyTree = $('#hierarchyTree');
 const controlPanel = $('#controlPanel');
@@ -33,6 +36,7 @@ const controlModeText = $('#controlModeText');
 const controlFlipIkBtn = $('#controlFlipIkBtn');
 const undoBtn = $('#undoBtn');
 const redoBtn = $('#redoBtn');
+const jsonFileName = $('#jsonFileName');
 const ikTarget = $('#ikTarget');
 const toggleIkBtn = $('#toggleIkBtn');
 const ikStatus = $('#ikStatus');
@@ -60,6 +64,7 @@ const state = {
   groups: [{ id:'group-default', name:'未分類' }],
   activeGroupId: 'group-default',
   selectedId: null,
+  groupMoveMode: false,
   pivotMode: false,
   backgroundUrl: '',
   dragRaf: 0,
@@ -344,6 +349,120 @@ function duplicateActiveGroup() {
   markChanged(`グループ複製: ${sourceGroup.name} → ${newName}`);
 }
 
+
+function groupRootParts(groupId) {
+  const members = partsInGroup(groupId);
+  const ids = new Set(members.map(p => p.id));
+  return members.filter(p => !p.parentId || !ids.has(p.parentId));
+}
+function vectorToParentLocal(part, dx, dy) {
+  const parent = part.parentId ? partById(part.parentId) : null;
+  if (!parent) return { x:dx, y:dy };
+  const inv = inverse(worldMatrix(parent));
+  const a = transformPoint(inv, 0, 0);
+  const b = transformPoint(inv, dx, dy);
+  return { x:b.x-a.x, y:b.y-a.y };
+}
+function translateGroupNowAndTimeline(groupId, dx, dy) {
+  const roots = groupRootParts(groupId);
+  roots.forEach(part => {
+    const d = vectorToParentLocal(part, dx, dy);
+    part.x += d.x;
+    part.y += d.y;
+    const track = trackForPart(part);
+    if (track) track.keys.forEach(key => { key.x += d.x; key.y += d.y; });
+  });
+  clearKeySelection(false);
+  applyAllPartStyles();
+  syncInspector();
+  renderTrackList();
+}
+function captureGroupTranslationBase(groupId) {
+  return groupRootParts(groupId).map(part => {
+    const parent = part.parentId ? partById(part.parentId) : null;
+    const invParent = parent ? inverse(worldMatrix(parent)) : identity();
+    const track = trackForPart(part);
+    return {
+      part,
+      x:part.x, y:part.y,
+      invParent,
+      keys:(track?.keys || []).map(key => ({ key, x:key.x, y:key.y }))
+    };
+  });
+}
+function applyGroupTranslationBase(base, dx, dy) {
+  base.forEach(item => {
+    const a = transformPoint(item.invParent, 0, 0);
+    const b = transformPoint(item.invParent, dx, dy);
+    const lx = b.x-a.x, ly = b.y-a.y;
+    item.part.x = item.x + lx;
+    item.part.y = item.y + ly;
+    item.keys.forEach(k => { k.key.x = k.x + lx; k.key.y = k.y + ly; });
+  });
+  clearKeySelection(false);
+  applyAllPartStyles(); syncInspector(); renderTrackList();
+}
+function setGroupMoveMode(enabled) {
+  state.groupMoveMode = !!enabled;
+  if (state.groupMoveMode) {
+    stopTest(); stopAnimation(true); commitAnimationPreview();
+    if (state.ikMode) disableIkMode(true);
+    if (state.pivotMode) {
+      state.pivotMode = false;
+      $('#togglePivotBtn').classList.remove('active');
+      $('#togglePivotBtn').textContent = 'ピボット設定';
+    }
+  }
+  document.body.classList.toggle('group-move-mode', state.groupMoveMode);
+  groupMoveBtn?.classList.toggle('active', state.groupMoveMode);
+  if (groupMoveBtn) groupMoveBtn.textContent = state.groupMoveMode ? '✥ 移動中' : '✥ 移動';
+  syncInspector();
+  if (controlModeText) controlModeText.textContent = state.groupMoveMode ? 'グループ全体移動 1px / ドラッグ可' : (state.ikMode ? 'IKターゲットをドラッグ / 末端パーツを掴んでIK' : (state.pivotMode ? 'ピボット移動 1px / 十字を直接ドラッグ可' : 'パーツ移動 1px / 回転 1°'));
+}
+function shiftActiveGroupKeys() {
+  const group = activeGroup();
+  if (!group) return;
+  const raw = window.prompt(`「${group.name}」の全キーを何msずらしますか？\n例: 左足を半周期ずらすなら 500\nループ時は端を越えると反対側へ回ります。`, String(Math.round(state.animation.duration/2)));
+  if (raw == null) return;
+  const offset = Math.round(Number(raw));
+  if (!Number.isFinite(offset) || offset === 0) return;
+  stopAnimation(true); commitAnimationPreview(); pushHistory(); clearKeySelection(false);
+  const duration = Math.max(1, Math.round(state.animation.duration));
+  let collisions = 0;
+  partsInGroup(group.id).forEach(part => {
+    const track = trackForPart(part); if (!track) return;
+    const moved = track.keys.map(key => {
+      let time;
+      if (state.animation.loop) time = ((Math.round(key.time) + offset) % duration + duration) % duration;
+      else time = clamp(Math.round(key.time) + offset, 0, duration);
+      return { ...key, time };
+    }).sort((a,b)=>a.time-b.time);
+    const dedup = new Map();
+    moved.forEach(key => { if (dedup.has(key.time)) collisions++; dedup.set(key.time, key); });
+    track.keys = [...dedup.values()].sort((a,b)=>a.time-b.time);
+  });
+  state.animation.currentTime = state.animation.loop ? ((state.animation.currentTime + offset) % duration + duration) % duration : clamp(state.animation.currentTime + offset,0,duration);
+  syncAnimationUi(); applyAnimationPreview(state.animation.currentTime);
+  markChanged(`グループ時間移動 ${offset>0?'+':''}${offset}ms${collisions?`（${collisions}キー重複整理）`:''}`);
+}
+function deleteActiveGroup() {
+  const group = activeGroup(); if (!group) return;
+  const members = partsInGroup(group.id);
+  if (!window.confirm(`グループ「${group.name}」を削除しますか？\nパーツ ${members.length}個と、そのタイムラインキーも削除されます。`)) return;
+  stopAnimation(true); stopTest(); commitAnimationPreview(); pushHistory();
+  const ids = new Set(members.map(p=>p.id));
+  state.parts.filter(p => !ids.has(p.id) && p.parentId && ids.has(p.parentId)).forEach(child => reparentPreserveWorld(child, ''));
+  members.forEach(part => { delete state.animation.tracks[part.id]; });
+  state.parts = state.parts.filter(p => !ids.has(p.id));
+  const idx = state.groups.findIndex(g=>g.id===group.id);
+  state.groups = state.groups.filter(g=>g.id!==group.id);
+  if (!state.groups.length) state.groups = [{ id:makeGroupId(), name:'未分類' }];
+  state.activeGroupId = state.groups[Math.min(Math.max(idx,0), state.groups.length-1)].id;
+  state.selectedId = partsInGroup(state.activeGroupId)[0]?.id || state.parts[0]?.id || null;
+  clearKeySelection(false); setGroupMoveMode(false); normalizeOrders(); refreshGroupSelects(); renderParts(); syncAnimationUi();
+  markChanged(`グループ削除: ${group.name}`);
+}
+
 function freshAnimation() {
   return {
     name: 'walk01', duration: 1000, loop: true, currentTime: 0,
@@ -523,6 +642,9 @@ groupBackBtn?.addEventListener('click',()=>moveActiveGroupLayer(-1));
 groupFrontBtn?.addEventListener('click',()=>moveActiveGroupLayer(1));
 renameGroupBtn?.addEventListener('click', renameActiveGroup);
 duplicateGroupBtn?.addEventListener('click', duplicateActiveGroup);
+shiftGroupTimeBtn?.addEventListener('click', shiftActiveGroupKeys);
+groupMoveBtn?.addEventListener('click', ()=>setGroupMoveMode(!state.groupMoveMode));
+deleteGroupBtn?.addEventListener('click', deleteActiveGroup);
 
 // ---------- history ----------
 function snapshot() {
@@ -538,6 +660,7 @@ function snapshot() {
 }
 function restoreSnapshot(snap) {
   stopTest();
+  setGroupMoveMode(false);
   disableIkMode(true);
   state.stage = { ...snap.stage };
   state.area = { ...snap.area };
@@ -769,7 +892,7 @@ function syncInspector() {
   $$('.rotate-btn', controlPanel).forEach(b => b.disabled = disabled || locked || state.ikMode);
   $$('.nudge-btn', controlPanel).forEach(b => b.disabled = disabled || state.testRunning);
   if (controlFlipIkBtn) controlFlipIkBtn.disabled = !state.ikMode || state.testRunning;
-  controlModeText.textContent = state.ikMode ? 'IKターゲットをドラッグ / 末端パーツを掴んでIK' : (state.pivotMode ? 'ピボット移動 1px / 十字を直接ドラッグ可' : 'パーツ移動 1px / 回転 1°');
+  controlModeText.textContent = state.groupMoveMode ? 'グループ全体移動 1px / ドラッグ可' : (state.ikMode ? 'IKターゲットをドラッグ / 末端パーツを掴んでIK' : (state.pivotMode ? 'ピボット移動 1px / 十字を直接ドラッグ可' : 'パーツ移動 1px / 回転 1°'));
 
   if (!part) {
     selectedCoord.textContent = '未選択';
@@ -1003,6 +1126,28 @@ function onPartPointerDown(event) {
   const node = event.currentTarget;
   const id = node.dataset.id;
   selectPart(id);
+  if (state.groupMoveMode && !state.testRunning) {
+    event.preventDefault();
+    stopAnimation(true); commitAnimationPreview(); pushHistory();
+    const base = captureGroupTranslationBase(state.activeGroupId);
+    const start = pointerToArea(event.clientX, event.clientY);
+    node.setPointerCapture?.(event.pointerId);
+    const moveGroup = e => {
+      const p = pointerToArea(e.clientX, e.clientY);
+      applyGroupTranslationBase(base, p.x-start.x, p.y-start.y);
+      if (state.dragRaf) return;
+      state.dragRaf = requestAnimationFrame(() => { state.dragRaf=0; markChanged('グループ全体移動'); });
+    };
+    const endGroup = () => {
+      node.removeEventListener('pointermove', moveGroup);
+      node.removeEventListener('pointerup', endGroup);
+      node.removeEventListener('pointercancel', endGroup);
+    };
+    node.addEventListener('pointermove', moveGroup);
+    node.addEventListener('pointerup', endGroup);
+    node.addEventListener('pointercancel', endGroup);
+    return;
+  }
   if (state.ikMode && !state.testRunning) {
     const chain = currentIkChain();
     if (chain && chain.end.id === id) {
@@ -1096,6 +1241,11 @@ function nudgeSelected(dx, dy) {
   stopAnimation(true);
   commitAnimationPreview();
   pushHistory();
+  if (state.groupMoveMode) {
+    translateGroupNowAndTimeline(state.activeGroupId, dx, dy);
+    markChanged('グループ全体を1px移動');
+    return;
+  }
   if (state.ikMode) {
     markSelectedKeyPoseDirty();
     solveIkTo(state.ikTarget.x + dx, state.ikTarget.y + dy);
@@ -1435,7 +1585,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 14,
+    version: 15,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     groups: state.groups.map(g => ({ id:g.id, name:g.name })),
@@ -1491,8 +1641,14 @@ $('#copyJsonBtn').addEventListener('click', async () => {
   catch { jsonPreview.select(); document.execCommand('copy'); }
   statusText.textContent = '座標コピー済み';
 });
+function requestedJsonFileName() {
+  let name = String(jsonFileName?.value || 'character-coordinates').trim() || 'character-coordinates';
+  name = name.replace(/[\\/:*?"<>|]+/g, '_');
+  if (!/\.json$/i.test(name)) name += '.json';
+  return name;
+}
 async function saveJsonWithDestination() {
-  const fileName = 'character-coordinates.json';
+  const fileName = requestedJsonFileName();
   const text = jsonText();
   const blob = new Blob([text], { type: 'application/json' });
 
@@ -1525,7 +1681,7 @@ async function saveJsonWithDestination() {
   try {
     const file = new File([text], fileName, { type: 'application/json' });
     if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
-      await navigator.share({ files: [file], title: 'キャラクター座標JSON' });
+      await navigator.share({ files: [file] });
       statusText.textContent = '共有/保存先を選択済み';
       return;
     }
@@ -1749,7 +1905,7 @@ $('#resetBtn').addEventListener('click', () => {
   stopTest(); pushHistory();
   state.stage = { width:390, height:844 };
   state.area = { x:12, y:18, width:160, height:220 };
-  state.parts = []; state.groups=[{id:'group-default',name:'未分類'}]; state.activeGroupId='group-default'; state.selectedId = null; state.pivotMode = false; state.ikMode = false; state.animation = freshAnimation(); refreshGroupSelects();
+  state.parts = []; state.groups=[{id:'group-default',name:'未分類'}]; state.activeGroupId='group-default'; state.selectedId = null; state.groupMoveMode=false; state.pivotMode = false; state.ikMode = false; state.animation = freshAnimation(); refreshGroupSelects();
   if (state.backgroundUrl) URL.revokeObjectURL(state.backgroundUrl);
   state.backgroundUrl = '';
   backgroundImage.hidden = true; backgroundImage.removeAttribute('src'); stageEmpty.hidden = false;
