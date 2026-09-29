@@ -17,6 +17,9 @@ const layerGroupSelect = $('#layerGroupSelect');
 const layerNewGroupBtn = $('#layerNewGroupBtn');
 const groupBackBtn = $('#groupBackBtn');
 const groupFrontBtn = $('#groupFrontBtn');
+const renameGroupBtn = $('#renameGroupBtn');
+const duplicateGroupBtn = $('#duplicateGroupBtn');
+const hierarchyGroupName = $('#hierarchyGroupName');
 const hierarchyTree = $('#hierarchyTree');
 const controlPanel = $('#controlPanel');
 const layerPanel = $('#layerPanel');
@@ -254,6 +257,93 @@ function createGroupFromUi() {
   markChanged(`グループ作成: ${name}`);
 }
 
+function uniqueGroupName(baseName) {
+  ensureGroups();
+  const base = String(baseName || 'グループ').trim() || 'グループ';
+  const names = new Set(state.groups.map(g => g.name));
+  if (!names.has(base)) return base;
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base} ${i}`;
+    if (!names.has(candidate)) return candidate;
+  }
+  return `${base} copy`;
+}
+function renameActiveGroup() {
+  const group = activeGroup();
+  if (!group) return;
+  const next = (window.prompt('グループ名を変更', group.name) || '').trim();
+  if (!next || next === group.name) return;
+  pushHistory();
+  group.name = next;
+  refreshGroupSelects();
+  renderLayers(); renderHierarchy(); renderTrackList(); syncKeyEditUi();
+  markChanged(`グループ名変更: ${next}`);
+}
+function cloneAnimationTrackForPart(sourcePart, clonedPart) {
+  const sourceTrack = trackForPart(sourcePart);
+  if (!sourceTrack?.keys?.length) return;
+  state.animation.tracks[clonedPart.id] = {
+    partId: clonedPart.id,
+    fileName: clonedPart.fileName,
+    name: clonedPart.name,
+    keys: sourceTrack.keys.map(key => ({
+      ...key,
+      id: `key-${Date.now()}-${Math.random().toString(36).slice(2,7)}`
+    }))
+  };
+}
+function duplicateActiveGroup() {
+  stopAnimation(true);
+  stopTest();
+  const sourceGroup = activeGroup();
+  if (!sourceGroup) return;
+  const sourceParts = partsInGroup(sourceGroup.id);
+  if (!sourceParts.length) {
+    alert('このグループには複製するパーツがありません。');
+    return;
+  }
+  const defaultName = uniqueGroupName(`${sourceGroup.name} コピー`);
+  const requested = window.prompt('複製後のグループ名', defaultName);
+  if (requested == null) return;
+  const newName = uniqueGroupName(requested.trim() || defaultName);
+  commitAnimationPreview();
+  pushHistory();
+
+  const newGroup = { id: makeGroupId(), name: newName };
+  state.groups.push(newGroup);
+  const idMap = new Map();
+  const clones = [];
+
+  sourceParts.forEach(source => {
+    const clone = {
+      ...source,
+      id: uid(),
+      groupId: newGroup.id,
+      parentId: source.parentId,
+      duplicateSourceId: source.id,
+      duplicateSourceFileName: source.fileName
+    };
+    idMap.set(source.id, clone.id);
+    clones.push({ source, clone });
+    state.parts.push(clone);
+  });
+
+  // Internal parents are redirected to the duplicated counterpart.
+  // A parent in another group (for example torso) remains connected to that original parent.
+  clones.forEach(({ source, clone }) => {
+    if (source.parentId && idMap.has(source.parentId)) clone.parentId = idMap.get(source.parentId);
+    cloneAnimationTrackForPart(source, clone);
+  });
+
+  state.activeGroupId = newGroup.id;
+  state.selectedId = clones.find(({source}) => source.id === state.selectedId)?.clone.id || clones[0]?.clone.id || null;
+  clearKeySelection(false);
+  refreshGroupSelects();
+  renderParts();
+  syncAnimationUi();
+  markChanged(`グループ複製: ${sourceGroup.name} → ${newName}`);
+}
+
 function freshAnimation() {
   return {
     name: 'walk01', duration: 1000, loop: true, currentTime: 0,
@@ -431,6 +521,8 @@ newGroupBtn.addEventListener('click',createGroupFromUi);
 layerNewGroupBtn.addEventListener('click',createGroupFromUi);
 groupBackBtn?.addEventListener('click',()=>moveActiveGroupLayer(-1));
 groupFrontBtn?.addEventListener('click',()=>moveActiveGroupLayer(1));
+renameGroupBtn?.addEventListener('click', renameActiveGroup);
+duplicateGroupBtn?.addEventListener('click', duplicateActiveGroup);
 
 // ---------- history ----------
 function snapshot() {
@@ -575,13 +667,21 @@ function normalizeOrders() {
 }
 
 // ---------- hierarchy tree ----------
+
 function renderHierarchy() {
   hierarchyTree.innerHTML = '';
-  if (!state.parts.length) {
-    hierarchyTree.innerHTML = '<div class="tree-empty">パーツ未読込</div>';
+  ensureGroups();
+  const group = activeGroup();
+  if (hierarchyGroupName) hierarchyGroupName.textContent = group ? group.name : '選択グループのみ';
+  const members = group ? partsInGroup(group.id) : [];
+  if (!members.length) {
+    hierarchyTree.innerHTML = '<div class="tree-empty">このグループにはパーツがありません</div>';
     return;
   }
-  const roots = state.parts.filter(p => !p.parentId || !partById(p.parentId));
+  const memberIds = new Set(members.map(p => p.id));
+  // If a part is parented to another group, it becomes a visual root here.
+  // The external connection is shown as a small badge but the other-group part itself is not displayed.
+  const roots = members.filter(p => !p.parentId || !memberIds.has(p.parentId));
   roots.sort((a,b) => a.name.localeCompare(b.name, 'ja'));
   const addBranch = (part, depth) => {
     const row = document.createElement('div');
@@ -600,8 +700,16 @@ function renderHierarchy() {
     btn.title = part.name;
     btn.addEventListener('click', () => selectPart(part.id));
     row.appendChild(btn);
+    const externalParent = part.parentId && !memberIds.has(part.parentId) ? partById(part.parentId) : null;
+    if (externalParent) {
+      const badge = document.createElement('span');
+      badge.className = 'tree-external-parent';
+      badge.textContent = `親: ${externalParent.name}`;
+      badge.title = `別グループの親: ${externalParent.name}`;
+      row.appendChild(badge);
+    }
     hierarchyTree.appendChild(row);
-    state.parts.filter(p => p.parentId === part.id)
+    members.filter(p => p.parentId === part.id)
       .sort((a,b) => a.name.localeCompare(b.name, 'ja'))
       .forEach(child => addBranch(child, depth + 1));
   };
@@ -1327,7 +1435,7 @@ $('#testRunBtn').addEventListener('click', () => state.testRunning ? stopTest() 
 // ---------- export ----------
 function exportData() {
   return {
-    version: 13,
+    version: 14,
     stage: { ...state.stage },
     characterArea: { ...state.area },
     groups: state.groups.map(g => ({ id:g.id, name:g.name })),
@@ -1349,7 +1457,8 @@ function exportData() {
       visible: p.visible,
       order: p.order,
       groupId: p.groupId,
-      groupName: groupById(p.groupId)?.name || ''
+      groupName: groupById(p.groupId)?.name || '',
+      duplicateSourceFileName: p.duplicateSourceFileName || ''
     })),
     animation: {
       name: state.animation.name,
@@ -1359,6 +1468,8 @@ function exportData() {
       trackFormat: 2,
       displayMode: 'groups',
       tracks: Object.values(state.animation.tracks).filter(track => track.keys?.length).map(track => ({
+        partId: track.partId,
+        groupId: partById(track.partId)?.groupId || '',
         fileName: track.fileName,
         name: track.name,
         keys: sortedTrackKeys(track).map(key => ({
@@ -1478,7 +1589,12 @@ function importAnimationData(savedAnimation, matches) {
   // v11 track format
   if (Array.isArray(savedAnimation.tracks)) {
     savedAnimation.tracks.forEach(savedTrack => {
-      const current=(savedTrack.fileName&&lookup.get(`file:${String(savedTrack.fileName).toLocaleLowerCase()}`))||(savedTrack.name&&lookup.get(`name:${String(savedTrack.name)}`));
+      const exact = savedTrack.partId != null
+        ? matches.find(({saved}) => String(saved.id) === String(savedTrack.partId))?.current
+        : null;
+      const current = exact ||
+        (savedTrack.fileName&&lookup.get(`file:${String(savedTrack.fileName).toLocaleLowerCase()}`)) ||
+        (savedTrack.name&&lookup.get(`name:${String(savedTrack.name)}`));
       (savedTrack.keys||[]).forEach(k=>addTrackKey(current,k));
     });
   } else if (Array.isArray(savedAnimation.keyframes)) {
@@ -1516,7 +1632,26 @@ function importCoordinateData(data) {
   const savedIdToCurrentId = new Map();
 
   data.parts.forEach(saved => {
-    const current = findCurrentPartForSaved(saved, unusedIds);
+    let current = findCurrentPartForSaved(saved, unusedIds);
+    // A duplicated group can contain another instance of the same source PNG.
+    // If the user loaded that PNG only once, create another in-memory instance automatically.
+    if (!current && saved.fileName) {
+      const lower = String(saved.fileName).toLocaleLowerCase();
+      const source = state.parts.find(p => String(p.fileName || '').toLocaleLowerCase() === lower);
+      if (source) {
+        current = {
+          ...source,
+          id: uid(),
+          name: saved.name || source.name,
+          parentId: '',
+          groupId: source.groupId,
+          duplicateSourceId: source.id,
+          duplicateSourceFileName: saved.duplicateSourceFileName || saved.fileName
+        };
+        state.parts.push(current);
+        unusedIds.add(current.id);
+      }
+    }
     if (!current) {
       missing.push(saved.fileName || saved.name || saved.id || '不明なパーツ');
       return;
@@ -1552,6 +1687,7 @@ function importCoordinateData(data) {
     current.order = num(saved.order, current.order);
     const savedGroup = (saved.groupId && state.groups.find(g=>g.id===saved.groupId)) || (saved.groupName && state.groups.find(g=>g.name===saved.groupName));
     if (savedGroup) current.groupId = savedGroup.id;
+    current.duplicateSourceFileName = saved.duplicateSourceFileName || current.duplicateSourceFileName || '';
     current.parentId = '';
   });
 

@@ -528,3 +528,35 @@ body {
   .timeline-handle small { display: none; }
   .timeline-mini-transport-btn { padding-inline: 7px; }
 }
+
+
+/* v14: group management + group-scoped hierarchy */
+.group-switch-row {
+  display:grid;
+  grid-template-columns:1fr;
+  gap:5px;
+}
+.group-action-buttons {
+  display:grid;
+  grid-template-columns:36px 36px minmax(48px,1fr) minmax(52px,1fr) 32px;
+  gap:4px;
+}
+.group-action-buttons button {
+  min-width:0;
+  padding:0 4px;
+  font-size:9px;
+  white-space:nowrap;
+}
+.layer-panel { width:250px; }
+.tree-external-parent {
+  flex:0 0 auto;
+  max-width:88px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:8px;
+  color:#8a7c91;
+  background:#f0eaf5;
+  border-radius:999px;
+  padding:2px 5px;
+}
